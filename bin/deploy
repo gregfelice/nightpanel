@@ -4,7 +4,7 @@
 # Two stages, mirroring docs/runbook/change/publish-apt-repo.md (ADR-048):
 #   1. dpkg-buildpackage -us -uc -b      → the binary .deb (source/changes left
 #      unsigned; the apt Release is what gets GPG-signed in stage 2).
-#   2. /srv/estate/infrastructure/ansible/scripts/build-apt-repo → assemble dists/+pool/, sign
+#   2. /usr/local/bin/build-apt-repo → assemble dists/+pool/, sign
 #      Release into InRelease/Release.gpg with the dedicated repo key, and
 #      (only with --publish) rsync the tree to the nginx static_root on droplet.
 #      (ADR-048 proposed dweezil; the shipped outcome serves it from droplet, which

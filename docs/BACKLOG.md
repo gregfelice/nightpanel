@@ -18,7 +18,7 @@ GPG-signed Release; served by droplet nginx). Live + verified on rivulet
 
 - [ ] **CI auto-publish to apt.tigermountain.ai** — `.forgejo/workflows/release-deb.yml`
   still uploads only to the private Forgejo registry; add a step running
-  `/srv/estate/infrastructure/ansible/scripts/build-apt-repo` into `/srv/apt/nightpanel` on `v*` tags
+  `/usr/local/bin/build-apt-repo` into `/srv/apt/nightpanel` on `v*` tags
   (needs write access on the droplet runner; the signing key is now vaulted, see below).
 - [x] **Signing key → Ansible vault** — DONE 2026-09-05. Stored as
   `nightpanel_apt_signing_key` (plus `..._fpr`) in the ops repo's SOPS-encrypted
