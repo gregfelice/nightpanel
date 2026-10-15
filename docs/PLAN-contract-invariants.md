@@ -21,7 +21,7 @@ next commit, which is how finding 6 happened.
 | Full suite | 690 passed, 8 skipped |
 | `tests/invariants/` | 218 passed, 8 skipped — 208 battery + 10 self-checks |
 | `ruff check` / `ruff format --check` | clean |
-| `bin/validate` | passed on `14ee352` — 11 checks, 0 failures, installed-package smoke included |
+| `bin/validate` | passed on `afc894f` — 11 checks, 0 failures, installed-package smoke included |
 
 The 8 skips are the palette rule, which is scoped to the adapters that can answer it (tmux
 alone); each skip names the adapter and the reason.
@@ -47,6 +47,8 @@ until one of those happens.
 | 8 | `chmod 0o500` test passes silently as root | Fixed, `643ca8f` — skip when `os.geteuid() == 0` |
 | — | The orchestrator's own rule was not applied at the entry point: `toggle.py` discarded the result | Fixed, `359a110` — the failure is recorded as a decision and exits non-zero |
 | 9 | `paths.py` and `runner.py` were added by `330d2f0` and never added to `nightpanel_sources` in `src/meson.build`. The source tree imported fine, so the suite passed; the installed `.deb` failed at `from ..paths import Paths` | Fixed, `29feb8c`. `bin/validate` caught it — 11 checks, 1 failure. Guard added, `14ee352`: every module under `src/nightpanel/` must be named by an install list, resolved as meson resolves it. Nothing in `tests/` checked this before; the failure only surfaces in CI's proof job on `v*` tags |
+| 10 | The import-time `Path.home()` class is enforced only inside `nightpanel/adapters/`. `services/np-host.py:20`, `services/backends/kde.py:18` and `player_app.py:22` still bind it at import | Open — the rule is scoped to adapters, so the battery cannot see them |
+| 11 | P5's coverage report was never produced, and the committed plan dropped it | Open — measured 2026-10-14: adapters 91–100%, TOTAL 49%, `renderers/emacs.py` and `renderers/firefox.py` 0%, `theme_service.py` 33%; `CLAUDE.md` still reads 220+ tests / 29% / 0% |
 
 The rule numbers in findings 4 and 5 are the original plan's. ADR-001 names the rules without
 numbering them, and the test comments carry the same numbers; if the surviving file is deleted, the
@@ -81,15 +83,15 @@ session — which is what happened to the plan this page replaces.
 > the repo root, and its numbers contradict each other. Every figure here is measured, on
 > 2026-10-14.
 >
-> `bin/validate` passed on `14ee352`: 11 checks, 0 failures, including the clean-trixie build and
+> `bin/validate` passed on `afc894f`: 11 checks, 0 failures, including the clean-trixie build and
 > the installed-package smoke. `ruff check` and `ruff format --check` are clean on the branch. The
 > commit that records this verdict is docs only, so the gate did not run on it.
 
 ## Remaining work
 
-1. Push the branch and open the pull request against `main` — nightpanel has no `master` on either
-   remote (`origin`: `main`, `deb-packaging`; `github/HEAD` → `main`) — with the description above,
-   which now carries the gate's verdict §2 requires.
+1. Open the pull request against `main` — nightpanel has no `master` on either remote (`origin`:
+   `main`, `deb-packaging`; `github/HEAD` → `main`) — with the description above, which now carries
+   the gate's verdict §2 requires. The branch is pushed with this commit.
 2. Rendering adapter and orchestrator failures in the UI — tracked in `docs/BACKLOG.md`. The
    entry point side is settled: `toggle.py` records a refused state write as a decision and
    exits non-zero, because `bin/analyze-toggle-log` only counts invocations that produced a
