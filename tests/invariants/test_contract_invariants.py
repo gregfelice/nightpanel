@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The contract battery.
 
-Every test here is parametrized over every Adapter subclass defined by a module in
-``nightpanel/adapters/``, so a new adapter inherits the whole battery without
+Every test here is parametrized over every Adapter subclass defined by a module
+in ``nightpanel/adapters/``, so a new adapter inherits the whole battery without
 anyone writing a test for it. That is the point: the rules in
 ``adapters/base.py`` are only real if a violation fails here.
 
 Discovery walks the directory rather than the package namespace, because the
 namespace only shows what was imported. An adapter module that is never imported
-is invisible to every check in this file — including the registration check — and
-forgetting the import is the classic miss. So the battery discovers from the files
-and then requires the module to be exported.
+is invisible to every check in this file — including the registration check —
+and forgetting the import is the classic miss. So the battery discovers from the
+files and then requires the module to be exported.
 
 The battery runs in a fixture root, never in the developer's home. Adapters are
 constructed with injected ``Paths`` and a ``RecordingRunner``; the runner answers
@@ -39,7 +39,7 @@ from nightpanel.paths import Paths
 from nightpanel.runner import RecordingRunner
 from nightpanel.services.nightpanel_orchestrator import NightpanelOrchestrator
 
-from .conftest import Env, all_adapters
+from .conftest import LIVE_ANSWERS, Env, StatefulRunner, all_adapters
 
 ADAPTERS = all_adapters()
 
@@ -464,9 +464,6 @@ def _static_violations(src: str) -> dict[str, list]:
         return not (isinstance(node.func.value, ast.Name) and node.func.value.id == "self")
 
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-    calls = [
-        n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-    ]
 
     imports = set()
     for node in ast.walk(tree):
@@ -480,6 +477,10 @@ def _static_violations(src: str) -> dict[str, list]:
     literals = {
         n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
     } - {ast.get_docstring(tree)}
+
+    calls = [
+        n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    ]
 
     return {
         "subprocess": ["subprocess"] if "subprocess" in imports else [],
@@ -515,3 +516,69 @@ def test_adapter_module_follows_the_rules(adapter: Adapter) -> None:
     found = _static_violations(Path(inspect.getsourcefile(type(adapter))).read_text())
     for rule, offenders in found.items():
         assert not offenders, f"{adapter.name}: {rule} violation {offenders}"
+
+
+# ── 7. Verify agrees with what apply did ───────────────────────────
+
+
+def test_verify_agrees_with_what_apply_did(adapter: Adapter, env: Env) -> None:
+    """apply → verify("on") → revert → verify("off"), for every adapter.
+
+    This is the happy path the BACKLOG claimed the battery ran, and it could not be
+    written against a canned runner: the adapter wrote something and the fake never
+    looked at it, so verify("on") was only ever true for the adapters whose state is
+    a file. With the modelled tools it is real for the live-session adapters too.
+
+    The fixture has already seeded this adapter's user state, so the only thing
+    changed here is the runner — and the palette, because verify() compares against
+    the palette it was handed and the fixture hands it the default one.
+    """
+    adapter.runner = StatefulRunner(prefix=LIVE_ANSWERS.get(adapter.name))
+    adapter.palette = BATTERY_PALETTE
+
+    snap = adapter.snapshot()
+    adapter.apply(BATTERY_PALETTE)
+    assert adapter.verify("on"), f"{adapter.name}: verify() does not agree with what apply() did"
+
+    adapter.revert(snap)
+    assert adapter.verify("off"), f"{adapter.name}: verify() does not agree with what revert() did"
+
+
+def _verify_reads_palette(cls: type) -> bool:
+    """Whether verify() looks at the palette, or at something that is the same for
+    every palette (a sentinel, a theme name, an import line)."""
+    src = inspect.getsource(cls)
+    match = re.search(r"def verify\(.*?(?=\n    def |\Z)", src, re.S)
+    return bool(match) and "self.palette" in match.group(0)
+
+
+def test_verify_tracks_the_palette(adapter: Adapter, env: Env) -> None:
+    """The half of rule #7 that can actually bite — and it bites on one adapter.
+
+    Only a verify() that reads the palette can tell that a *different* palette was
+    applied. The other nine verify on a sentinel, a theme name, or an import line, so
+    they answer "on" for every palette. That is a legitimate answer for them, but it
+    means this rule cannot check them, and a rule that checks nothing is a preference.
+
+    So the rule is scoped to the adapters that can answer it, and the skip says which.
+    Today that is tmux alone. The self-check proves the rule is not vacuous: an
+    adapter that compares against the default palette instance instead of the one it
+    was handed passes the happy path and fails here.
+    """
+    if not _verify_reads_palette(type(adapter)):
+        pytest.skip(f"{adapter.name}: verify() is not derived from the palette")
+
+    other = Palette(name="other", bg="#202020", bg_header="#202020", fg="#406040")
+    adapter.runner = StatefulRunner(prefix=LIVE_ANSWERS.get(adapter.name))
+    adapter.palette = BATTERY_PALETTE
+
+    adapter.apply(BATTERY_PALETTE)
+    assert adapter.verify("on"), f"{adapter.name}: verify() does not agree with what apply() did"
+
+    # Same live state, different palette. A verify that tracks the palette now says
+    # no; one that compares against a fixed instance still says yes, and that is the
+    # bug this rule exists to catch.
+    adapter.palette = other
+    assert not adapter.verify("on"), (
+        f"{adapter.name}: verify() still says 'on' for a palette it was not applied with"
+    )

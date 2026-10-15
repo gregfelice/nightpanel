@@ -15,8 +15,10 @@ capture, and a round-trip test that starts from an empty file proves nothing.
 from __future__ import annotations
 
 import importlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 
@@ -43,9 +45,9 @@ def adapters_in_package(pkg) -> list[type[Adapter]]:
 def adapters_from_files(pkg) -> list[type[Adapter]]:
     """Every Adapter subclass defined by a module in the package directory.
 
-    Walked from the files, not from the namespace. Reading the namespace would miss
-    exactly the miss this battery exists to catch: an adapter module written and
-    never imported, which is invisible to every check here, including the
+    Walked from the files, not from the namespace. Reading the namespace would
+    miss exactly the miss this battery exists to catch: an adapter module written
+    and never imported, which is invisible to every check here, including the
     registration check.
     """
     found = set()
@@ -61,7 +63,7 @@ def adapters_from_files(pkg) -> list[type[Adapter]]:
 
 
 def all_adapters() -> list[type[Adapter]]:
-    """Every Adapter subclass defined by a module in nightpanel/adapters/."""
+    """Every Adapter subclass exported by nightpanel.adapters."""
     import nightpanel.adapters as pkg
 
     return adapters_from_files(pkg)
@@ -92,11 +94,16 @@ def _seed_claude_code(a: Adapter, env: Env) -> None:
     settings, wrapper = a.restorable_paths()
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text('{"theme": "blue"}\n')
-    # The installer's symlink, which the adapter replaces with a wrapper.
-    wrapper.parent.mkdir(parents=True, exist_ok=True)
-    target = env.root / "real-bin"
+    # The installer's layout, not just the symlink. The adapter only installs its
+    # wrapper when versions/ exists, so a fixture with the symlink and no versions
+    # dir makes apply() skip the wrapper — and verify("on") can then never be true,
+    # for a reason that has nothing to do with the adapter.
+    versions = env.root / ".local" / "share" / "claude" / "versions"
+    versions.mkdir(parents=True, exist_ok=True)
+    target = versions / "claude"
     target.write_text('#!/bin/sh\nexec real-claude "$@"\n')
     target.chmod(0o755)
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
     wrapper.symlink_to(target)
 
 
@@ -149,6 +156,98 @@ LIVE_ANSWERS = {
     "gnome": {("gsettings", "get"): "'user-value'"},
     "firefox": {("gsettings", "get"): "0.9"},
 }
+
+USER_VALUE = "user-value"
+
+
+class StatefulRunner(RecordingRunner):
+    """A fake tool that remembers what was set, so verify() can be checked.
+
+    RecordingRunner answers from a canned table, which can never make verify("on")
+    true after an apply: the adapter wrote something and the fake never looked at
+    it. This models the four tools whose state is a key/value store — gsettings,
+    tmux, nvim, emacs — so a write is visible to the next read.
+
+    tmux is the case that forced it: its apply() does not set options, it writes an
+    overlay and sources it, so the model has to read the file the adapter wrote.
+    That is what the real tmux does.
+
+    It is a model of four tools, not a proof about the world. It shows that an
+    adapter's verify() agrees with what the adapter itself wrote. Whether a real
+    tmux sources an overlay, or a real gsettings propagates, is the VM's job.
+    """
+
+    def __init__(self, initial: dict | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.state: dict = dict(initial or {})
+
+    def run(self, cmd: list[str]) -> CompletedProcess[str]:
+        self.calls.append(list(cmd))
+        key = tuple(cmd)
+        answered = key in self.answers or any(key[: len(p)] == p for p in self.prefix)
+        if self.fail_all or key in self.fail or (self.no_session and not answered):
+            return CompletedProcess(cmd, 1, "", f"{cmd[0]}: not running")
+        value = self._handle(cmd)
+        if value is None:
+            return CompletedProcess(cmd, 0, self.answers.get(key, ""), "")
+        return CompletedProcess(cmd, 0, value, "")
+
+    def _handle(self, cmd: list[str]) -> str | None:
+        """What the modelled tool would answer. None means not a modelled command."""
+        if cmd[0] == "gsettings" and len(cmd) >= 4:
+            slot = (cmd[2], cmd[3])
+            if cmd[1] == "get":
+                return self.state.get(slot, USER_VALUE)
+            if cmd[1] == "set" and len(cmd) >= 5:
+                self.state[slot] = cmd[4]
+                return ""
+
+        if cmd[0] == "tmux":
+            if cmd[1:3] == ["show", "-gv"]:
+                return self.state.get(("tmux", cmd[3]), USER_VALUE)
+            if cmd[1:3] == ["set", "-g"]:
+                self.state[("tmux", cmd[3])] = cmd[4]
+                return ""
+            if cmd[1] == "source-file":
+                return self._source(Path(cmd[2]))
+
+        if cmd[0] == "nvim" and "--remote-expr" in cmd:
+            return self.state.get(("nvim", cmd[cmd.index("--remote-expr") + 1]), USER_VALUE)
+        if cmd[0] == "nvim" and "--remote-send" in cmd:
+            match = re.search(r"colorscheme (\S+)", cmd[cmd.index("--remote-send") + 1])
+            if match:
+                self.state[("nvim", "g:colors_name")] = match.group(1)
+            return ""
+
+        if cmd[0] == "emacsclient":
+            expr = cmd[-1]
+            enabled = self.state.setdefault(("emacs", "themes"), set())
+            match = re.search(r"\(quote (\w+)\)", expr)
+            theme = match.group(1) if match else None
+            if "load-theme" in expr:
+                enabled.add(theme)
+                return "t"
+            if "disable-theme" in expr:
+                enabled.discard(theme)
+                return ""
+            if "custom-enabled-themes" in expr:
+                return str(sorted(enabled))
+
+        return None
+
+    def _source(self, overlay: Path) -> str:
+        """Apply the overlay the way tmux would: read it, set what it sets.
+
+        The adapter never calls `tmux set` for these options — it writes a file and
+        sources it. The only way the model can know what the adapter wrote is to read
+        the file, which is what the real tmux does.
+        """
+        for line in overlay.read_text().splitlines():
+            match = re.fullmatch(r"set(?:-window-option)? -g (\S+)\s+\"?([^\"]*)\"?", line)
+            if match:
+                self.state[("tmux", match.group(1))] = match.group(2)
+        return ""
+
 
 # What makes a tool *live* in the fixture: a socket or session the adapter can
 # find. Without it an adapter that only acts on a running instance does nothing,

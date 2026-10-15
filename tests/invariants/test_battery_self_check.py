@@ -20,7 +20,7 @@ from typing import Literal
 import pytest
 
 from nightpanel.adapters import Adapter
-from nightpanel.palette import Palette
+from nightpanel.palette import NIGHTPANEL, Palette
 from nightpanel.paths import Paths
 from nightpanel.runner import RecordingRunner
 
@@ -207,6 +207,52 @@ def test_battery_flags_a_write_that_bypasses_base() -> None:
     assert battery._static_violations(inspect.getsource(_DirectWritingAdapter))["raw_writes"], (
         "the battery must flag a write that bypasses base.write()"
     )
+
+
+class _DefaultPaletteAdapter(Adapter):
+    """An adapter whose verify() compares against the default palette instance.
+
+    This is the bug shape the static rules cannot see: no hex literal, no absolute
+    path, nothing in the source that looks wrong — just a reference. It is the same
+    mistake as the tmux adapter testing for "#000000", in the form that survives a
+    lint rule, and it is why the verify checks have to run.
+    """
+
+    name = "default-palette"
+
+    def restorable_paths(self) -> list[Path]:
+        return [self.paths.home / "theme"]
+
+    def snapshot(self) -> dict:
+        return {str(self.restorable_paths()[0]): self.capture(self.restorable_paths()[0])}
+
+    def apply(self, palette: Palette) -> None:
+        self.write(self.restorable_paths()[0], f"bg={palette.bg}\n")
+
+    def revert(self, snapshot: dict) -> None:
+        self.restore(self.restorable_paths()[0], snapshot[str(self.restorable_paths()[0])])
+
+    def verify(self, expected: Literal["on", "off"]) -> bool:
+        on = self.palette is NIGHTPANEL
+        return on if expected == "on" else not on
+
+
+def test_battery_flags_a_verify_that_hardcodes_the_palette(tmp_path: Path) -> None:
+    """The runtime rules are the only ones that can see a reference.
+
+    Applying the battery palette and asking about a second one is what separates a
+    verify that tracks the palette from one that names a particular palette. Nothing
+    in the source distinguishes them.
+    """
+    env = Env(root=tmp_path, paths=Paths(home=tmp_path), runner=RecordingRunner())
+    bad = _DefaultPaletteAdapter(
+        paths=env.paths, runner=env.runner, palette=battery.BATTERY_PALETTE
+    )
+
+    with pytest.raises(AssertionError):
+        battery.test_verify_agrees_with_what_apply_did(bad, env)
+    with pytest.raises(AssertionError):
+        battery.test_verify_tracks_the_palette(bad, env)
 
 
 def test_battery_flags_an_adapter_module_that_is_not_exported(tmp_path: Path) -> None:
