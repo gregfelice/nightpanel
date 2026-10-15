@@ -25,9 +25,13 @@ adapters coming.
 
 ## Decision
 
-The contract is a set of invariants checked against **every** `Adapter` subclass
-discovered by walking `nightpanel.adapters`, in `tests/invariants/`. A new adapter is
-picked up automatically; nobody writes a test for it.
+The contract is a set of invariants checked against **every** `Adapter` subclass defined
+by a module in `nightpanel/adapters/`, in `tests/invariants/`. Discovery walks the files
+rather than the package namespace: the namespace only shows what was imported, and the
+classic miss is an adapter module written and never imported — invisible to the whole
+battery, including the rule that exists to catch it. A new adapter is picked up
+automatically; nobody writes a test for it, and the battery also requires each discovered
+class to be exported.
 
 The rules, as they are now checkable:
 
