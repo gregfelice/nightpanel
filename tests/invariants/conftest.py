@@ -14,6 +14,7 @@ capture, and a round-trip test that starts from an empty file proves nothing.
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,16 +28,43 @@ from nightpanel.runner import RecordingRunner
 USER_CONTENT = "user content — nightpanel must put this back\n"
 
 
+def adapters_in_package(pkg) -> list[type[Adapter]]:
+    """What the package namespace shows — only what was imported."""
+    return sorted(
+        {
+            obj
+            for obj in vars(pkg).values()
+            if isinstance(obj, type) and issubclass(obj, Adapter) and obj is not Adapter
+        },
+        key=lambda c: c.name,
+    )
+
+
+def adapters_from_files(pkg) -> list[type[Adapter]]:
+    """Every Adapter subclass defined by a module in the package directory.
+
+    Walked from the files, not from the namespace. Reading the namespace would miss
+    exactly the miss this battery exists to catch: an adapter module written and
+    never imported, which is invisible to every check here, including the
+    registration check.
+    """
+    found = set()
+    for root in pkg.__path__:
+        for file in sorted(Path(root).glob("*.py")):
+            module = importlib.import_module(f"{pkg.__name__}.{file.stem}")
+            found.update(
+                obj
+                for obj in vars(module).values()
+                if isinstance(obj, type) and issubclass(obj, Adapter) and obj is not Adapter
+            )
+    return sorted(found, key=lambda c: c.name)
+
+
 def all_adapters() -> list[type[Adapter]]:
-    """Every Adapter subclass exported by nightpanel.adapters."""
+    """Every Adapter subclass defined by a module in nightpanel/adapters/."""
     import nightpanel.adapters as pkg
 
-    found = {
-        obj
-        for obj in vars(pkg).values()
-        if isinstance(obj, type) and issubclass(obj, Adapter) and obj is not Adapter
-    }
-    return sorted(found, key=lambda c: c.name)
+    return adapters_from_files(pkg)
 
 
 # ── Seeders ────────────────────────────────────────────────────────
@@ -44,6 +72,7 @@ def all_adapters() -> list[type[Adapter]]:
 # A seeder builds the fixture for one adapter. The generic seeder writes plain
 # text at every declared path, which is enough for any adapter that does not
 # parse its own format. Adapters that parse a format need content that parses.
+
 
 def _seed_generic(a: Adapter, env: Env) -> None:
     for p in a.restorable_paths():
@@ -66,7 +95,7 @@ def _seed_claude_code(a: Adapter, env: Env) -> None:
     # The installer's symlink, which the adapter replaces with a wrapper.
     wrapper.parent.mkdir(parents=True, exist_ok=True)
     target = env.root / "real-bin"
-    target.write_text("#!/bin/sh\nexec real-claude \"$@\"\n")
+    target.write_text('#!/bin/sh\nexec real-claude "$@"\n')
     target.chmod(0o755)
     wrapper.symlink_to(target)
 

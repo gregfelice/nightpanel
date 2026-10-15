@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The contract battery.
 
-Every test here is parametrized over every Adapter subclass found in
-``nightpanel.adapters``, so a new adapter inherits the whole battery without
+Every test here is parametrized over every Adapter subclass defined by a module in
+``nightpanel/adapters/``, so a new adapter inherits the whole battery without
 anyone writing a test for it. That is the point: the rules in
 ``adapters/base.py`` are only real if a violation fails here.
+
+Discovery walks the directory rather than the package namespace, because the
+namespace only shows what was imported. An adapter module that is never imported
+is invisible to every check in this file — including the registration check — and
+forgetting the import is the classic miss. So the battery discovers from the files
+and then requires the module to be exported.
 
 The battery runs in a fixture root, never in the developer's home. Adapters are
 constructed with injected ``Paths`` and a ``RecordingRunner``; the runner answers
@@ -124,6 +130,23 @@ def test_every_adapter_is_registered_in_the_orchestrator(adapter: Adapter) -> No
     assert adapter.name in registered, f"{adapter.name} is not in the orchestrator's adapter list"
 
 
+def test_every_discovered_adapter_is_exported_by_the_package(adapter: Adapter) -> None:
+    """The other half of registration.
+
+    Discovery reads the directory, so an adapter module that is never imported
+    still reaches the battery — and then has to be exported, or the miss the
+    battery is meant to catch is the miss it cannot see.
+    """
+    import nightpanel.adapters as pkg
+
+    cls = type(adapter)
+    assert getattr(pkg, cls.__name__, None) is cls, (
+        f"{adapter.name}: defined in {inspect.getmodule(cls).__name__.split('.')[-1]}.py but not "
+        "exported by nightpanel.adapters — the battery discovers adapters through the package, "
+        "so an unimported module is invisible to every check here"
+    )
+
+
 def test_declared_paths_live_inside_the_injected_paths(adapter: Adapter, env: Env) -> None:
     for p in adapter.restorable_paths():
         assert str(p).startswith(str(env.root)), (
@@ -166,9 +189,7 @@ def test_apply_changes_what_it_declares(adapter: Adapter) -> None:
     before = _snapshot_state(adapter)
     adapter.apply(BATTERY_PALETTE)
     if all(_snapshot_state(adapter)[str(p)] == before[str(p)] for p in paths):
-        raise AssertionError(
-            f"{adapter.name}: apply() changed nothing it declared restorable"
-        )
+        raise AssertionError(f"{adapter.name}: apply() changed nothing it declared restorable")
 
 
 def test_round_trip_restores_declared_paths_byte_for_byte(adapter: Adapter) -> None:
@@ -284,7 +305,9 @@ def test_a_fresh_profile_is_created_or_refused(adapter: Adapter, tmp_path: Path)
     )
 
 
-def test_every_user_file_an_adapter_writes_is_declared_restorable(adapter: Adapter, env: Env) -> None:
+def test_every_user_file_an_adapter_writes_is_declared_restorable(
+    adapter: Adapter, env: Env
+) -> None:
     """Rule #3 checked on the write itself.
 
     Every file an adapter writes must be either a user file it commits to put back
@@ -373,8 +396,12 @@ def test_capture_records_existence_mode_and_symlinks(adapter: Adapter, env: Env)
     captured_link = adapter.capture(link)
 
     assert captured_file["existed"] is True
-    assert captured_file["mode"] == 0o640, "mode is not recorded — an executable file comes back non-executable"
-    assert captured_link["link_to"] == str(target), "a symlink must be recorded as a link, not as content"
+    assert captured_file["mode"] == 0o640, (
+        "mode is not recorded — an executable file comes back non-executable"
+    )
+    assert captured_link["link_to"] == str(target), (
+        "a symlink must be recorded as a link, not as content"
+    )
 
     missing = env.root / "missing"
     assert adapter.capture(missing)["existed"] is False
@@ -391,7 +418,9 @@ def test_restore_refuses_an_incomplete_capture(adapter: Adapter, env: Env) -> No
     p.write_text("user content\n")
     with pytest.raises(Exception, match=f"{adapter.name}"):
         adapter.restore(p, {})
-    assert p.read_text() == "user content\n", "refusing must not damage the file it refused to touch"
+    assert p.read_text() == "user content\n", (
+        "refusing must not damage the file it refused to touch"
+    )
 
 
 # ── 6. Static shape ────────────────────────────────────────────────
@@ -411,8 +440,12 @@ def test_adapter_module_follows_the_rules(adapter: Adapter) -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.add(node.module.split(".")[0])
 
-    assert "subprocess" not in imports, f"{adapter.name}: must shell out through the injected Runner"
-    assert "logging" not in imports, f"{adapter.name}: base.py owns logging; adapters raise AdapterError"
+    assert "subprocess" not in imports, (
+        f"{adapter.name}: must shell out through the injected Runner"
+    )
+    assert "logging" not in imports, (
+        f"{adapter.name}: base.py owns logging; adapters raise AdapterError"
+    )
 
     assert "Path.home()" not in src, (
         f"{adapter.name}: import-time Path.home() — resolve through the injected Paths"
@@ -420,9 +453,7 @@ def test_adapter_module_follows_the_rules(adapter: Adapter) -> None:
     # Docstrings are excluded: a comment explaining a past hardcoded hex is not a
     # hardcoded hex. Only strings the code can act on count.
     literals = {
-        n.value
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
     } - {ast.get_docstring(tree)}
 
     hex_hits = sorted(s for s in literals if _HEX.search(s))

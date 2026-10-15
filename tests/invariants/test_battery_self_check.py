@@ -11,7 +11,9 @@ anyone writing a test for it.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +24,7 @@ from nightpanel.palette import Palette
 from nightpanel.paths import Paths
 from nightpanel.runner import RecordingRunner
 
+from . import conftest
 from . import test_contract_invariants as battery
 from .conftest import Env
 
@@ -178,3 +181,41 @@ def test_battery_flags_writing_an_undeclared_file(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError):
         battery.test_every_user_file_an_adapter_writes_is_declared_restorable(bad, env)
+
+
+def test_battery_flags_an_adapter_module_that_is_not_exported(tmp_path: Path) -> None:
+    """The miss rule 1 exists to catch, proven on the shape of the miss.
+
+    Namespace discovery only shows what was imported, so an adapter module written
+    and never imported is invisible to every check in the battery — including the
+    registration check, because the adapter is not in the list either. A package
+    with a ghost module and an empty __init__ shows the difference, and why the
+    battery discovers from the files instead.
+    """
+    pkg_dir = tmp_path / "ghostpkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "ghost.py").write_text(
+        "from nightpanel.adapters import Adapter\n"
+        "class GhostAdapter(Adapter):\n"
+        "    name = 'ghost'\n"
+        "    def snapshot(self):\n        return {}\n"
+        "    def apply(self, palette):\n        pass\n"
+        "    def revert(self, snapshot):\n        pass\n"
+        "    def verify(self, expected):\n        return True\n"
+    )
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        pkg = importlib.import_module("ghostpkg")
+        assert conftest.adapters_in_package(pkg) == [], (
+            "namespace discovery must miss an adapter module that was never imported"
+        )
+        found = conftest.adapters_from_files(pkg)
+        assert [c.__name__ for c in found] == ["GhostAdapter"], (
+            "file discovery must find it, so the export check can fail on it"
+        )
+    finally:
+        sys.path.remove(str(tmp_path))
+        for name in ("ghostpkg", "ghostpkg.ghost"):
+            sys.modules.pop(name, None)
