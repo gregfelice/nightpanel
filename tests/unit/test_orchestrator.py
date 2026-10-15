@@ -18,6 +18,7 @@ behaviour these tests are about.
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 from typing import Literal
 
@@ -351,8 +352,39 @@ def test_is_active_tracks_active_file(env) -> None:
     assert o.is_active() is False
 
 
-def test_load_state_returns_empty_on_corrupt_file(env) -> None:
+def test_load_state_returns_empty_when_the_file_is_absent(env) -> None:
+    """No state file is a normal case: nothing has been applied yet."""
+    o = _orchestrator(env, [FakeAdapter("a")])
+    assert o._load_state() == {}
+
+
+def test_load_state_raises_on_a_corrupt_file(env) -> None:
+    """A truncated state file is not the same as an absent one.
+
+    Returning {} made every adapter report "no capture" — true, but the cause was
+    gone: nine failures in the journal for one damaged file.
+    """
     env.state.parent.mkdir(parents=True, exist_ok=True)
     env.state.write_text("{ broken json")
     o = _orchestrator(env, [FakeAdapter("a")])
-    assert o._load_state() == {}
+    with pytest.raises(orch.OrchestratorError, match="corrupt"):
+        o._load_state()
+
+
+def test_apply_raises_when_the_state_file_cannot_be_written(env) -> None:
+    """The rule the battery enforces on adapters, applied to the orchestrator.
+
+    A state write that logged a warning and returned left ACTIVE_FILE touched with
+    no baseline behind it: the state machine claimed the world was on, and every
+    stateful adapter then refused to revert because it had nothing to put back.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("chmod 0o500 does not block writes for root")
+    o = _orchestrator(env, [FakeAdapter("a")])
+    o._state_path.parent.mkdir(parents=True, exist_ok=True)
+    o._state_path.parent.chmod(0o500)
+    with pytest.raises(orch.OrchestratorError, match="could not save state"):
+        o.apply()
+    assert not env.active.exists(), (
+        "ACTIVE_FILE must not be marked when the baseline behind it failed to land"
+    )

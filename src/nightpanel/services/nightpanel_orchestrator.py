@@ -36,6 +36,18 @@ from ..runner import Runner, SubprocessRunner
 
 _LOG = logging.getLogger(__name__)
 
+
+class OrchestratorError(Exception):
+    """A failure in the orchestrator's own bookkeeping: the state file, ACTIVE_FILE.
+
+    Adapters raise AdapterError for their own failures, and the battery refuses an
+    adapter that logs a warning and returns. The orchestrator had been doing exactly
+    that with the state file — a failed write logged, returned, and then ACTIVE_FILE
+    was touched, so the state machine claimed the world was on with no baseline
+    behind it. Same rule, applied to the thing doing the enforcing.
+    """
+
+
 # Source files that ship with the package — these are not user paths, so they
 # stay module-level. Everything the orchestrator *writes* is resolved through
 # the injected Paths (see paths.py): the import-time Path.home() constants here
@@ -202,8 +214,7 @@ class NightpanelOrchestrator:
             self._active_file.touch()
         else:
             _LOG.error(
-                "nightpanel: not marking ACTIVE_FILE — stateful adapters failed: %s. "
-                "Outcomes: %s",
+                "nightpanel: not marking ACTIVE_FILE — stateful adapters failed: %s. Outcomes: %s",
                 stateful_failed,
                 outcomes,
             )
@@ -321,9 +332,7 @@ class NightpanelOrchestrator:
         """
         changed = False
         ext_src = Path(__file__).parent.parent / "shell-extension" / "nightpanel@nightpanel"
-        ext_dest = (
-            self.paths.data / "gnome-shell" / "extensions" / "nightpanel@nightpanel"
-        )
+        ext_dest = self.paths.data / "gnome-shell" / "extensions" / "nightpanel@nightpanel"
         try:
             if ext_src.exists() and ext_src != ext_dest:
                 ext_dest.mkdir(parents=True, exist_ok=True)
@@ -382,7 +391,9 @@ class NightpanelOrchestrator:
             if r.returncode != 0:
                 # The ghosts are still in the list; reporting the prune as done
                 # would be the same lie rule #1 forbids in the adapters.
-                _LOG.error("nightpanel: prune write failed: %s", r.stderr.strip() or "non-zero exit")
+                _LOG.error(
+                    "nightpanel: prune write failed: %s", r.stderr.strip() or "non-zero exit"
+                )
                 return 0
             _LOG.info(
                 "nightpanel: pruned %d ghost extension(s): %s", len(ghosts), ", ".join(ghosts)
@@ -417,13 +428,20 @@ class NightpanelOrchestrator:
         try:
             self._state_path.write_text(json.dumps(state, indent=2))
         except OSError as e:
-            _LOG.warning("nightpanel: could not save state: %s", e)
+            raise OrchestratorError(f"could not save state: {e}") from e
 
     def _load_state(self) -> dict:
+        if not self._state_path.exists():
+            return {}
         try:
             return json.loads(self._state_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return {}
+        except OSError as e:
+            raise OrchestratorError(f"could not read state: {e}") from e
+        except json.JSONDecodeError as e:
+            # A truncated state file is not the same as an absent one. Returning {}
+            # here made every adapter report "no capture", which is true but hides the
+            # cause: the journal showed nine failures for one damaged file.
+            raise OrchestratorError(f"state file is corrupt: {e}") from e
 
     def _active_adapters(self):
         return [a for a in self.adapters if a.installed()]
