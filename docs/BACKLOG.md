@@ -18,7 +18,7 @@ GPG-signed Release; served by droplet nginx). Live + verified on rivulet
 
 - [ ] **CI auto-publish to apt.tigermountain.ai** — `.forgejo/workflows/release-deb.yml`
   still uploads only to the private Forgejo registry; add a step running
-  `/srv/estate/infrastructure/ansible/scripts/build-apt-repo` into `/srv/apt/nightpanel` on `v*` tags
+  `/usr/local/bin/build-apt-repo` into `/srv/apt/nightpanel` on `v*` tags
   (needs write access on the droplet runner; the signing key is now vaulted, see below).
 - [x] **Signing key → Ansible vault** — DONE 2026-09-05. Stored as
   `nightpanel_apt_signing_key` (plus `..._fpr`) in the ops repo's SOPS-encrypted
@@ -73,15 +73,16 @@ GPG-signed Release; served by droplet nginx). Live + verified on rivulet
 - [ ] **Singleton dbus race** — dropping `NON_UNIQUE` mostly fixes duplicates, but TWO instances can still spawn if launched fast enough that neither has registered the dbus name yet. Observed during the Alt+Super+/ binding test on 2026-05-26: two `--cheat-sheet` instances, the second ended up owning the dbus name. Use a startup lock file (or accept the rare race).
 - [ ] **No lock on concurrent `apply()`/`revert()`** — singleton mitigates most cases but rapid panel-button + in-app-toggle races still possible. `fcntl.flock` on `nightpanel-state.json` would close it.
 - [ ] **No surfacing of adapter failures to the UI** — `apply()` now returns outcomes but nothing renders them. Need `np-status.json` + extension JS to display per-adapter state in the panel button.
-- [ ] **`TmuxAdapter.snapshot()` / `FirefoxAdapter.snapshot()` return `{}`** — violate the adapter contract; revert is a hardcoded recovery rather than real restoration. Capture a real pre-state.
-- [ ] **Per-adapter happy-path tests** — orchestrator covered now (5 tests); each adapter still needs at least one apply→verify("on")→revert→verify("off") smoke test.
+- [x] **`TmuxAdapter.snapshot()` / `FirefoxAdapter.snapshot()` return `{}`** — DONE 2026-10-14, committed on `np-contract-invariants` (`330d2f0`). Both capture real pre-state: tmux captures the live value of every option the overlay sets, firefox records the profile it writes into. `revert({})` on a stateful adapter now raises instead of guessing, and the battery in `tests/invariants/` refuses any adapter that reverts on an empty snapshot — see `docs/adr/001-adapter-contract-invariants.md`.
+- [x] **Per-adapter happy-path tests** — DONE 2026-10-14, committed on `np-contract-invariants` (`588b6b5`). The contract battery (`tests/invariants/`) runs seed → capture → apply → verify("on") → revert → verify("off") against every `Adapter` subclass discovered by walking the module files in `nightpanel/adapters/`, so a new adapter gets the happy path without anyone writing it. Behaviour-specific tests stay per adapter. The palette half is scoped to the adapters that can answer it: only a `verify()` that reads the palette can tell that a *different* palette was applied, and today that is tmux alone. The other eight verify on a sentinel, a theme name, or an import line, so they answer "on" for every palette — a legitimate answer for them, but not one this rule can check. They skip with the reason named, because a rule that checks nothing is a preference.
+- [ ] **Render the outcomes the contract now produces** — `apply()`/`revert()` return per-adapter outcomes, and `AdapterNotLive` is a third state (the tool was not running, the file half landed). Nothing renders it: the panel button and `np-status.json` need to show per-adapter state, and the journal should record "not live" separately from "failed". Follows from `docs/adr/001-adapter-contract-invariants.md`.
 
 ## Theming layer — P2 (DX / code quality)
 
 - [ ] **Extract shared helpers** — `_run`, `_gsettings_get/set`, `~/.config/nightpanel` path construction duplicated across 5+ files. Single `_util.py` + `_paths.py`.
-- [ ] **Inject paths into adapters** — module-level constants make testing require monkey-patching globals; a `Paths` dataclass via constructor is cleaner.
+- [x] **Inject paths into adapters** — DONE 2026-10-14 (`330d2f0`). `Paths` is injected through the constructor, so no adapter binds the developer's home at import time and every test runs in a fixture root. Module-level `Path.home()` and absolute path literals are refused by the battery.
 - [ ] **`Adapter.name` class-attr without default + no ABC enforcement** — forgetting to set `name` is a runtime `AttributeError`. Default + check or `__init_subclass__`.
-- [ ] **`_load_state()` swallows JSON decode errors** — corrupt state file = silent no-op revert. Should warn loudly.
+- [x] **`_load_state()` swallows JSON decode errors** — DONE 2026-10-14 (`bb7c9cf`). A corrupt state file now raises `OrchestratorError` and reports as "state file corrupt" rather than as nine per-adapter "no capture" failures, and `_save_state()` raises on a failed write so `nightpanel-active` is never marked without a baseline behind it. The toggle path now records that failure as an outcome instead of crashing with a traceback; rendering it in the UI is still open above.
 - [ ] **`np-host.py` 500ms busy-poll** — replace with `Gio.FileMonitor` / `inotify` for true event-driven forwarding.
 - [ ] **`np-host.py` filename hyphen + copied-to-config detachment** — rename to `np_host.py`; consider not copying (run from src tree via wrapper).
 - [ ] **`nvim` adapter socket discovery** — patterns may miss modern nvim's `$XDG_RUNTIME_DIR/nvim.<pid>.0`. Validate.
@@ -138,7 +139,7 @@ GPG-signed Release; served by droplet nginx). Live + verified on rivulet
 Layered plan (agreed 2026-06-02). The instinct toward VM-based stress testing is right, but it's step 4, not step 1 — building it first inverts the cost/value order.
 
 1. [x] **Green the suite** — done 2026-06-02 (298 passing, stable, hermetic). A red suite can't tell a regression from pre-existing breakage; greening already surfaced 3 live source regressions (below).
-2. [ ] **Cheap logic-bug wins** — the enumerated tier-1 bugs (`_load_state()` JSON-decode swallow, `TmuxAdapter`/`FirefoxAdapter.snapshot()` returning `{}`, etc.). Pure unit tests, no environment.
+2. [ ] **Cheap logic-bug wins** — the enumerated tier-1 bugs. The two named here are done on `np-contract-invariants` (`bb7c9cf`, `330d2f0`); the rest of the tier-1 list is open. Pure unit tests, no environment.
 3. [ ] **NEXT ROUND — spike the ephemeral-isolated-env stress loop.** HOME/XDG → tmpdir, `dbus-run-session` + `python-dbusmock`, then hammer apply/revert/toggle thousands of times with randomized timing to flush out the dbus singleton race + concurrent `apply()`/`revert()` race (both still open under Theming P1). Runs in the GitHub-mirror CI, nothing to babysit. We now have a real `bin/nightpanel-toggle` to hammer.
    - **Open question to settle during the spike:** can `gnome-shell --headless --virtual-monitor` (or a nested compositor) actually load/exercise the panel extension in CI? If not, extension testing falls into the VM tier.
 4. [ ] **VM** — only for the visual + shell-extension residue (Firefox flash, panel button, event re-dispatch). Must be scripted (libvirt/QEMU + `virsh snapshot` revert + SSH runner), not click-driven, or it's a safer manual bench, not automation. Heavy on this box (OOM history + og-llama ~24GB) — runs when og-llama is down.

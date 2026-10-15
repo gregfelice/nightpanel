@@ -4,7 +4,7 @@
 # Two stages, mirroring docs/runbook/change/publish-apt-repo.md (ADR-048):
 #   1. dpkg-buildpackage -us -uc -b      → the binary .deb (source/changes left
 #      unsigned; the apt Release is what gets GPG-signed in stage 2).
-#   2. /srv/estate/infrastructure/ansible/scripts/build-apt-repo → assemble dists/+pool/, sign
+#   2. /usr/local/bin/build-apt-repo → assemble dists/+pool/, sign
 #      Release into InRelease/Release.gpg with the dedicated repo key, and
 #      (only with --publish) rsync the tree to the nginx static_root on droplet.
 #      (ADR-048 proposed dweezil; the shipped outcome serves it from droplet, which
@@ -31,7 +31,7 @@
 #                    new fingerprint, and every client keyring would need redistributing
 #                    before apt could verify anything. The fingerprint survived the domain
 #                    rename, so /etc/apt/keyrings/nightpanel.gpg still verifies the repo.
-#   BUILD_APT_REPO   path to the ops publisher  (default: /srv/estate/infrastructure/ansible/scripts/build-apt-repo)
+#   BUILD_APT_REPO   path to the ops publisher  (default: /usr/local/bin/build-apt-repo)
 #   DIST COMPONENT ARCH STAGE DEST   passed through to build-apt-repo (own defaults)
 set -euo pipefail
 
@@ -50,7 +50,7 @@ case "${1:-}" in
 esac
 
 GPG_KEY="${GPG_KEY:-apt@rizlabs.com}"
-BUILD_APT_REPO="${BUILD_APT_REPO:-/srv/estate/infrastructure/ansible/scripts/build-apt-repo}"
+BUILD_APT_REPO="${BUILD_APT_REPO:-/usr/local/bin/build-apt-repo}"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -63,7 +63,7 @@ for t in dpkg-buildpackage dpkg-parsechangelog dpkg-architecture gpg; do
 done
 [ -x "$BUILD_APT_REPO" ] || {
     echo "✗ apt publisher not found/executable: $BUILD_APT_REPO" >&2
-    echo "   it lives in /srv/estate/infrastructure (the estate ops repo); set BUILD_APT_REPO to override." >&2
+    echo "   roles/apt_repo installs it on the publishing host (estate converge droplet); set BUILD_APT_REPO to override." >&2
     exit 1
 }
 gpg --list-secret-keys "$GPG_KEY" >/dev/null 2>&1 || {

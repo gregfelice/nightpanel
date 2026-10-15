@@ -1,34 +1,32 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """gws (Getting Work Sorted) adapter — flips the theme in gws's state file.
 
-gws is a Rust TUI GTD app (~/.local/bin/gws). Its theme selection is
-persisted as a ``theme:<Name>`` line in the sibling ``.state`` file
-(default ``~/.gws/todo.state``). gws ships with a ``Nightpanel`` theme
-that mirrors this project's palette — the adapter writes
-``theme:Nightpanel`` on apply, restores the previous theme on revert.
+gws is a Rust TUI GTD app. Its theme selection is persisted as a ``theme:<Name>``
+line in the sibling ``.state`` file (default ``~/.gws/todo.state``). gws ships
+with a ``Nightpanel`` theme that mirrors this project's palette — the adapter
+writes ``theme:Nightpanel`` on apply, restores the previous theme on revert.
+
+This is the model the other adapters should follow: it records *existence*
+explicitly, so revert can tell "the file did not exist before us" from "the
+file existed with a different theme", and it preserves the other lines.
 
 Caveats:
-- gws reads its state file only on startup and writes it on exit.
-  If gws is RUNNING when the adapter toggles, our write is silently
-  clobbered by gws's exit-time save. Workaround: close gws before
-  toggling, or relaunch gws after toggling.
-- The adapter preserves the other lines (cat:/proj:/task: collapse
-  markers) in the state file when rewriting.
+- gws reads its state file only on startup and writes it on exit. If gws is
+  RUNNING when the adapter toggles, our write is silently clobbered by gws's
+  exit-time save. Workaround: close gws before toggling, or relaunch after.
+- The adapter preserves the other lines (cat:/proj:/task: collapse markers)
+  in the state file when rewriting.
 """
 
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 from typing import Literal
 
 from ..palette import Palette
-from .base import Adapter
+from .base import Adapter, AdapterError
 
-_LOG = logging.getLogger(__name__)
-
-_STATE = Path.home() / ".gws" / "todo.state"
 _NP_THEME = "Nightpanel"
 
 
@@ -56,52 +54,57 @@ def _serialize(theme: str | None, others: list[str]) -> str:
 class GwsAdapter(Adapter):
     name = "gws"
 
+    @property
+    def _state(self) -> Path:
+        return self.paths.home / ".gws" / "todo.state"
+
     def installed(self) -> bool:
         # Binary on PATH or the state dir exists (gws has been run at least once).
-        return bool(shutil.which("gws")) or _STATE.parent.exists()
+        return bool(shutil.which("gws")) or self._state.parent.exists()
+
+    def restorable_paths(self) -> list[Path]:
+        return [self._state]
 
     def snapshot(self) -> dict:
-        if not _STATE.exists():
-            return {"theme": None, "existed": False}
-        try:
-            theme, _ = _parse(_STATE.read_text())
-            return {"theme": theme, "existed": True}
-        except OSError as e:
-            _LOG.debug("nightpanel: gws snapshot read failed: %s", e)
-            return {"theme": None, "existed": False}
+        captured = self.capture(self._state)
+        theme, _ = _parse(captured["content"] or "") if captured["existed"] else (None, [])
+        return {"file": captured, "theme": theme}
 
     def apply(self, palette: Palette) -> None:
         self._set_theme(_NP_THEME)
 
     def revert(self, snapshot: dict) -> None:
-        if not snapshot.get("existed", False):
-            # State file didn't exist before us. If our theme line is now
-            # the only content, drop the whole file; otherwise just strip
-            # our line and leave the rest.
+        captured = snapshot.get("file")
+        if not captured:
+            raise AdapterError(f"{self.name}: no capture for {self._state}; refusing to revert")
+        if not captured["existed"]:
+            # State file didn't exist before us. If our theme line is now the
+            # only content, drop the whole file; otherwise just strip our line
+            # and leave the rest.
             self._set_theme(None, drop_if_empty=True)
             return
-        self._set_theme(snapshot.get("theme"))
+        self.restore(self._state, captured)
 
     def verify(self, expected: Literal["on", "off"]) -> bool:
-        if not _STATE.exists():
+        if not self._state.exists():
             return expected == "off"
-        try:
-            theme, _ = _parse(_STATE.read_text())
-        except OSError:
-            return expected == "off"
+        theme, _ = _parse(self.read_text(self._state))
         on = theme == _NP_THEME
         return on if expected == "on" else not on
 
     # ── helpers ──
     def _set_theme(self, theme: str | None, *, drop_if_empty: bool = False) -> None:
-        try:
-            _STATE.parent.mkdir(parents=True, exist_ok=True)
-            existing = _STATE.read_text() if _STATE.exists() else ""
-            _, others = _parse(existing)
-            content = _serialize(theme, others)
-            if drop_if_empty and not content.strip():
-                _STATE.unlink(missing_ok=True)
+        if not self._state.exists():
+            if drop_if_empty and not theme:
                 return
-            _STATE.write_text(content)
-        except OSError as e:
-            _LOG.warning("nightpanel: gws state write failed: %s", e)
+            self.write(self._state, _serialize(theme, []))
+            return
+        _, others = _parse(self.read_text(self._state))
+        content = _serialize(theme, others)
+        if drop_if_empty and not content.strip():
+            try:
+                self._state.unlink(missing_ok=True)
+            except OSError as e:
+                raise AdapterError(f"{self.name}: could not remove {self._state}: {e}") from e
+            return
+        self.write(self._state, content)

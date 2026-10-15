@@ -76,20 +76,33 @@ def main(argv: list[str] | None = None) -> int:
     # the shell extension forwards (--evt-time, --evt-button, ...).
     _logline(log, f"=== invoked argv={argv!r}")
 
+    from nightpanel.services.nightpanel_orchestrator import OrchestratorError
+
     now = time.time()
-    if not active.exists():
-        decision = "apply"
-        drive("apply")
-        active.touch()
-    else:
-        age_s = now - active.stat().st_mtime
-        if age_s < guard_s:
-            # Spurious re-dispatch of the press that just turned us on — keep state.
-            decision = "debounce-revert"
+    try:
+        if not active.exists():
+            decision = "apply"
+            drive("apply")
+            active.touch()
         else:
-            decision = "revert"
-            drive("revert")
-            active.unlink(missing_ok=True)
+            age_s = now - active.stat().st_mtime
+            if age_s < guard_s:
+                # Spurious re-dispatch of the press that just turned us on — keep state.
+                decision = "debounce-revert"
+            else:
+                decision = "revert"
+                drive("revert")
+                active.unlink(missing_ok=True)
+    except OrchestratorError as e:
+        # A failure is still an outcome, so the entry point has to record it as one.
+        # Nothing here may claim a decision happened: the orchestrator refused to save
+        # state, so nightpanel-active is left untouched rather than marked on top of a
+        # missing baseline. An uncaught exception would leave toggle.log with an
+        # invocation and no decision line, and bin/analyze-toggle-log only counts
+        # invocations that produced a decision — the failure would be invisible to the
+        # tool built to diagnose toggles. Rendering it is the UI work in the BACKLOG.
+        _logline(log, f"decision: failed ({e})")
+        return 1
 
     _logline(log, f"decision: {decision}")
     return 0

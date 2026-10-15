@@ -127,7 +127,7 @@ bin/deploy --publish     # build, then run the proof run (bin/validate) as a GAT
 
 `apt.tigermountain.ai` is a **public surface**, so publishing is deliberate and gated:
 `--publish` aborts unless `bin/validate` passes first. The signing key (`apt@rizlabs.com` by
-default, override with `GPG_KEY`) and the publisher script (`/srv/estate/infrastructure/ansible/scripts/build-apt-repo`,
+default, override with `GPG_KEY`) and the publisher script (`/usr/local/bin/build-apt-repo`,
 override with `BUILD_APT_REPO`) live in the ops repo — see the runbook
 `/srv/estate/infrastructure/docs/runbook/change/publish-apt-repo.md` (ADR-048). Build artifacts are corralled into
 `dist/` (gitignored).

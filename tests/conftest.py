@@ -12,6 +12,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from nightpanel.paths import Paths
+from nightpanel.runner import RecordingRunner
+
 # =============================================================================
 # Privilege-escalation guardrail (autouse — applies to every test)
 # =============================================================================
@@ -782,3 +785,28 @@ def sample_profile_toml(tmp_path: Path, sample_profile_data: dict[str, Any]) -> 
 def presets_dir() -> Path:
     """Return the path to the built-in presets directory."""
     return Path(__file__).parent.parent / "src" / "nightpanel" / "resources" / "presets"
+
+
+# =============================================================================
+# Hermetic world for adapter tests
+# =============================================================================
+#
+# The old pattern was `monkeypatch.setattr(mod, "_CFG", tmp_path / ...)`, which
+# only worked because the adapter bound its paths at import time — the bug class
+# `Paths` exists to remove. With injection there is nothing to patch: point
+# `Paths(home=tmp_path)` at the fixture and every file the adapter touches lands
+# there. `runner` is the fake live session.
+#
+# See tests/invariants/conftest.py for the same fixtures in the contract battery.
+
+
+@pytest.fixture
+def paths(tmp_path: Path) -> Paths:
+    """A hermetic Paths rooted at the fixture. Nothing here touches the real home."""
+    return Paths(home=tmp_path)
+
+
+@pytest.fixture
+def runner() -> RecordingRunner:
+    """A fake live session: records every command, answers nothing, exits 0."""
+    return RecordingRunner()
