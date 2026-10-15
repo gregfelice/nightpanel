@@ -133,6 +133,10 @@ class FirefoxAdapter(Adapter):
             return []
         return [profile / "chrome" / "userChrome.css", profile / "user.js"]
 
+    def own_paths(self) -> list[Path]:
+        # The command file is ours: it is the extension's inbox, not user state.
+        return [self._command_file]
+
     def snapshot(self) -> dict:
         # The profile is part of the capture: without it, an empty `files` could
         # mean "no profile existed" or "we never looked", and those are different

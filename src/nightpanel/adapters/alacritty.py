@@ -43,9 +43,12 @@ class AlacrittyAdapter(Adapter):
         return bool(shutil.which("alacritty")) or self._cfg.exists()
 
     def restorable_paths(self) -> list[Path]:
-        # Only the user's file. The rendered theme is ours, regenerated on
-        # every apply; there is nothing to put back.
+        # Only the user's file.
         return [self._cfg]
+
+    def own_paths(self) -> list[Path]:
+        # The rendered theme is ours, regenerated on every apply; nothing to put back.
+        return [self._np_theme]
 
     def snapshot(self) -> dict:
         return {"file": self.capture(self._cfg), "import": self._read_import()}

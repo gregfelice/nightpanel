@@ -102,6 +102,10 @@ class ClaudeCodeAdapter(Adapter):
 
     # ── helpers ──
     def _read_settings(self) -> dict:
+        if not self._settings.exists():
+            # A fresh profile has no prior state. That is not a read failure, and
+            # apply() is expected to create the file.
+            return {}
         try:
             return json.loads(self.read_text(self._settings))
         except json.JSONDecodeError as e:

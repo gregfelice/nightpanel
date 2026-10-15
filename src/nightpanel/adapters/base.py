@@ -131,6 +131,15 @@ class Adapter(ABC):
         """
         return []
 
+    def own_paths(self) -> list[Path]:
+        """Files that are ours, not the user's: regenerated on every apply, nothing to put back.
+
+        Declared rather than commented, so the battery can check that every file an
+        adapter writes is either restorable or explicitly ours. A file that is neither is
+        a user file written without a capture that could put it back.
+        """
+        return []
+
     # ── Shared helpers ────────────────────────────────────────────
 
     def capture(self, path: Path) -> dict:
@@ -241,10 +250,16 @@ class Adapter(ABC):
 
         Adapters read through this (or `capture()`), never through `Path.read_text()`
         directly; the battery's static rule enforces that.
+
+        Absence is not a read failure and is not converted into one: every adapter treats
+        a missing file as empty state, and turning `FileNotFoundError` into `AdapterError`
+        means a fresh profile raises instead of being created. Callers that may see a
+        missing file must say so with an existence check, and `OSError` is left to
+        propagate so their `except OSError` stays live.
         """
         try:
             return path.read_text()
-        except (OSError, ValueError) as e:
+        except UnicodeDecodeError as e:
             raise AdapterError(f"{self.name}: could not read {path}: {e}") from e
 
     def write(self, path: Path, content: str) -> None:
@@ -253,9 +268,17 @@ class Adapter(ABC):
         The orchestrator's success accounting depends on this. A write that logs
         a warning and returns is recorded as a success, and the state machine
         then lies about being on.
+
+        A path that is a symlink is replaced, not written through. `capture()` records a
+        link as a link with no content, so writing through it mutates a file the capture
+        cannot put back — that is how claude_code's wrapper landed on the real binary under
+        `versions/`. Whatever `restore()` puts back has to be what `capture()` recorded, so
+        the write stays at the recorded location.
         """
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_symlink():
+                path.unlink()
             path.write_text(content)
         except OSError as e:
             raise AdapterError(f"{self.name}: could not write {path}: {e}") from e

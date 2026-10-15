@@ -49,6 +49,12 @@ class TmuxAdapter(Adapter):
     def installed(self) -> bool:
         return bool(shutil.which("tmux"))
 
+    def own_paths(self) -> list[Path]:
+        # The overlay is ours: rendered from the palette on every apply, so there is
+        # no user state in it to put back. The user's live options are the state, and
+        # snapshot() captures those.
+        return [self._overlay]
+
     def snapshot(self) -> dict:
         """Capture the live value of every option the overlay will overwrite.
 

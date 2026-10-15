@@ -21,6 +21,7 @@ rather than unit tests.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from typing import Literal
 
 from ..palette import Palette
@@ -43,6 +44,11 @@ class EmacsAdapter(Adapter):
 
     def installed(self) -> bool:
         return bool(shutil.which("emacs"))
+
+    def own_paths(self) -> list[Path]:
+        # The sentinel is ours: it is what verify() reads when no daemon runs, not
+        # user state, so there is nothing in it to put back.
+        return [self._sentinel]
 
     def snapshot(self) -> dict:
         # Capture the daemon's currently-enabled themes so revert can restore

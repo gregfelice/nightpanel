@@ -63,10 +63,16 @@ class GeminiCliAdapter(Adapter):
         theme = self._parse_theme(captured["content"]) if captured["existed"] else None
         # Don't record our own applied value as the baseline — revert would then
         # leave the user staring at "nightpanel" after the customTheme block is
-        # gone. Fall through to the CLI default.
-        if theme == _NP_THEME:
-            theme = None
-        return {"settings": captured, "theme": theme, "wrapper": self.capture(self._wrapper)}
+        # gone. Fall through to the CLI default. Only when the file existed and its
+        # theme was ours: a file that did not exist must be removed by revert, and a
+        # file that had no theme must come back exactly as it was.
+        ours = bool(captured["existed"] and theme == _NP_THEME)
+        return {
+            "settings": captured,
+            "theme": None if ours else theme,
+            "baseline_was_ours": ours,
+            "wrapper": self.capture(self._wrapper),
+        }
 
     def apply(self, palette: Palette) -> None:
         self._write_custom_theme(palette)
@@ -79,13 +85,13 @@ class GeminiCliAdapter(Adapter):
             raise AdapterError(
                 f"{self.name}: no capture for {self._settings}; refusing to revert on a guess"
             )
-        if snapshot.get("theme") is None:
+        if snapshot.get("baseline_was_ours"):
             # The baseline we recorded was our own value, so byte-for-byte
             # restore would re-engage the theme whose customTheme block revert
             # has just removed. This is the one deliberate exception to the
-            # round-trip; the battery runs against a user-chosen baseline, so it
-            # still holds this adapter to the invariant.
-            data = self._parse_json(captured["content"]) if captured["existed"] else {}
+            # round-trip, and it only applies to a file that existed before us —
+            # a file we created is removed, not rewritten with a default.
+            data = self._parse_json(captured["content"])
             ui = data.get("ui", {})
             ui.pop("customThemes", None)
             ui["theme"] = _DEFAULT_THEME
@@ -117,6 +123,10 @@ class GeminiCliAdapter(Adapter):
         return self._parse_json(text).get("ui", {}).get("theme")
 
     def _read_settings(self) -> dict:
+        if not self._settings.exists():
+            # A fresh profile has no prior state. That is not a read failure, and
+            # apply() is expected to create the file.
+            return {}
         return self._parse_json(self.read_text(self._settings))
 
     def _read_theme(self) -> str | None:
