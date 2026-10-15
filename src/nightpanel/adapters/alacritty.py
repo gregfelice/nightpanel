@@ -47,11 +47,17 @@ class AlacrittyAdapter(Adapter):
         return [self._cfg]
 
     def own_paths(self) -> list[Path]:
-        # The rendered theme is ours, regenerated on every apply; nothing to put back.
+        # The rendered theme is ours, regenerated on every apply — but only when we
+        # created it. A theme file already standing there is user state, so snapshot()
+        # captures it and revert puts it back.
         return [self._np_theme]
 
     def snapshot(self) -> dict:
-        return {"file": self.capture(self._cfg), "import": self._read_import()}
+        return {
+            "file": self.capture(self._cfg),
+            "import": self._read_import(),
+            "own": self.capture_own_paths(),
+        }
 
     def apply(self, palette: Palette) -> None:
         # Regenerate the theme file from the palette on every apply so palette
@@ -64,6 +70,7 @@ class AlacrittyAdapter(Adapter):
         if not captured:
             raise AdapterError(f"{self.name}: no capture for {self._cfg}; refusing to revert")
         self.restore(self._cfg, captured)
+        self.restore_own_paths(snapshot)
 
     def verify(self, expected: Literal["on", "off"]) -> bool:
         imp = self._read_import() or []

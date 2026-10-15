@@ -176,6 +176,49 @@ def test_battery_flags_writing_an_undeclared_file(tmp_path: Path) -> None:
         battery.test_every_user_file_an_adapter_writes_is_declared_restorable(bad, env)
 
 
+class _OwnPathAdapter(Adapter):
+    """An adapter that declares a path as its own and overwrites a file already there.
+
+    The declaration is true only for a file the adapter created. This one writes over a
+    file the user already had, and its revert has no capture to restore from. The
+    declaration check is green on it — the file it writes is declared — so only the
+    round trip can see that the file was user state before the adapter arrived. That is
+    why the rule has to be checked on behaviour, not on the source.
+    """
+
+    #: No restorable path, so nothing can be put back. The reason is the shape itself.
+    stateful = False
+
+    name = "own-path"
+
+    def own_paths(self) -> list[Path]:
+        return [self.paths.home / "ours"]
+
+    def snapshot(self) -> dict:
+        return {}  # declares the path as its own and never captures it
+
+    def apply(self, palette: Palette) -> None:
+        self.write(self.own_paths()[0], "nightpanel applied\n")
+
+    def revert(self, snapshot: dict) -> None:
+        pass  # nothing was captured, so the user's file is gone
+
+    def verify(self, expected: Literal["on", "off"]) -> bool:
+        return True
+
+
+def test_battery_flags_an_own_path_that_is_user_state(tmp_path: Path) -> None:
+    env = Env(root=tmp_path, paths=Paths(home=tmp_path), runner=RecordingRunner())
+    bad = _OwnPathAdapter(paths=env.paths, runner=env.runner)
+
+    # The declaration itself is honest-looking: the file it writes is declared as its
+    # own. The rule that bites is the round trip.
+    battery.test_every_user_file_an_adapter_writes_is_declared_restorable(bad, env)
+
+    with pytest.raises(AssertionError):
+        battery.test_a_declared_own_path_that_already_exists_is_captured_or_refused(bad, env)
+
+
 class _DirectWritingAdapter(Adapter):
     """An adapter that writes through Path.write_text instead of base.write()."""
 

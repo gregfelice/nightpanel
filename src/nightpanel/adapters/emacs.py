@@ -11,11 +11,12 @@ Apply writes a sentinel + tells any running daemons to load the theme; revert
 removes the sentinel + tells daemons to disable it. `verify()` keys off the
 sentinel (the only signal that survives across daemon restarts).
 
-The sentinel is an artifact this adapter owns, not user state, so it is not a
-restorable path. The user state here is the live daemon's theme list, which
-cannot be restored byte-for-byte — that is the honest limit of what this
-adapter can promise, and it is why the live-session half needs the VM harness
-rather than unit tests.
+The sentinel is an artifact this adapter owns when it created it, so it is not a
+restorable path. A file already standing at that path is user state whatever the
+declaration claims, so snapshot() captures it and revert puts it back. The user
+state here is the live daemon's theme list, which cannot be restored byte-for-byte
+— that is the honest limit of what this adapter can promise, and it is why the
+live-session half needs the VM harness rather than unit tests.
 """
 
 from __future__ import annotations
@@ -46,8 +47,9 @@ class EmacsAdapter(Adapter):
         return bool(shutil.which("emacs"))
 
     def own_paths(self) -> list[Path]:
-        # The sentinel is ours: it is what verify() reads when no daemon runs, not
-        # user state, so there is nothing in it to put back.
+        # The sentinel is ours when we created it: it is what verify() reads when no
+        # daemon runs, not user state. A file already standing at that path is the
+        # user's whatever this declaration says, so snapshot() captures it.
         return [self._sentinel]
 
     def snapshot(self) -> dict:
@@ -55,7 +57,7 @@ class EmacsAdapter(Adapter):
         # them. If no daemon is running, the capture is empty — that is an
         # honest answer, not a skipped capture.
         themes = self.run(["emacsclient", "-e", "custom-enabled-themes"])
-        return {"enabled_themes": themes}
+        return {"enabled_themes": themes, "own": self.capture_own_paths()}
 
     def apply(self, palette: Palette) -> None:
         # `palette` is unused: the Adapter protocol passes it, but the theme is
@@ -91,7 +93,11 @@ class EmacsAdapter(Adapter):
         except OSError as e:
             raise AdapterError(f"{self.name}: could not remove {self._sentinel}: {e}") from e
 
-        # 2. Tell any live daemon to disable nightpanel. The user's other
+        # 2. A sentinel that was standing there before us is the user's file, not
+        #    ours, and it has to go back.
+        self.restore_own_paths(snapshot)
+
+        # 3. Tell any live daemon to disable nightpanel. The user's other
         #    themes (captured in snapshot["enabled_themes"]) remain enabled
         #    since we never disabled them.
         self.run_optional(

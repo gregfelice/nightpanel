@@ -66,7 +66,7 @@ def test_revert_restores_what_snapshot_captured(env):
     live = RecordingRunner(prefix={("tmux", "show", "-gv"): "user-value"})
     adapter = TmuxAdapter(paths=env.paths, runner=live)
     snapshot = adapter.snapshot()
-    assert snapshot and all(v == "user-value" for v in snapshot.values())
+    assert snapshot["options"] and all(v == "user-value" for v in snapshot["options"].values())
 
     adapter.apply(NIGHTPANEL)
     live.calls.clear()
@@ -78,8 +78,8 @@ def test_snapshot_records_none_for_options_with_no_live_server(env):
     """`None` is the honest answer for "nothing running to capture"; `{}` is not."""
     no_server = RecordingRunner(no_session=True)
     snapshot = TmuxAdapter(paths=env.paths, runner=no_server).snapshot()
-    assert set(snapshot) == set(_OPTIONS)
-    assert all(v is None for v in snapshot.values())
+    assert set(snapshot["options"]) == set(_OPTIONS)
+    assert all(v is None for v in snapshot["options"].values())
 
 
 def test_verify_on_when_status_style_matches_the_palette(env):

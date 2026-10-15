@@ -102,7 +102,10 @@ def test_verify_tracks_sentinel(env):
 
 def test_snapshot_captures_enabled_themes(env):
     snap = EmacsAdapter(paths=env.paths, runner=env.runner).snapshot()
-    assert snap == {"enabled_themes": "(doom-one)"}
+    assert snap["enabled_themes"] == "(doom-one)"
+    # The sentinel is declared as its own, but a file already standing there is user
+    # state, so the capture covers it too. Nothing was there in this fixture.
+    assert snap["own"][str(env.sentinel)]["existed"] is False
 
 
 def test_revert_removes_sentinel_and_disables(env):

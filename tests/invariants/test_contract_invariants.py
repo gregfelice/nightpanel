@@ -39,7 +39,7 @@ from nightpanel.paths import Paths
 from nightpanel.runner import RecordingRunner
 from nightpanel.services.nightpanel_orchestrator import NightpanelOrchestrator
 
-from .conftest import LIVE_ANSWERS, Env, StatefulRunner, all_adapters
+from .conftest import LIVE_ANSWERS, USER_CONTENT, Env, StatefulRunner, all_adapters
 
 ADAPTERS = all_adapters()
 
@@ -345,6 +345,54 @@ def test_every_user_file_an_adapter_writes_is_declared_restorable(
     # or a symlink that leaves the root — and the declaration test cannot see that.
     outside = [str(p) for p in written if not str(p).startswith(str(env.root))]
     assert not outside, f"{adapter.name}: wrote {outside} outside the injected Paths root"
+
+
+def test_a_declared_own_path_that_already_exists_is_captured_or_refused(
+    adapter: Adapter, env: Env
+) -> None:
+    """A declaration of ownership does not make a file that is already there ours.
+
+    `own_paths()` is the escape hatch in the contract: a path declared as ours has
+    nothing to put back. That is only true for a file the adapter created. A file
+    standing at a declared own path before apply is user state whatever the
+    declaration claims, so the adapter must have captured it or refused — otherwise
+    declaring a path as ours is a way to destroy a user file with no way back, which
+    is the same damage rule #4 refuses, reached through the declaration instead of
+    through revert.
+
+    The rule is checked on the round trip, not on the source: seed user content at
+    every declared own path, apply, revert, and the content has to be back. An
+    adapter that cannot capture it has to refuse, and refusing is an honest outcome.
+    """
+    own = adapter.own_paths()
+    if not own:
+        return
+
+    for p in own:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(USER_CONTENT)
+    before = {str(p): p.read_bytes() for p in own}
+
+    try:
+        snap = adapter.snapshot()
+        adapter.apply(BATTERY_PALETTE)
+        adapter.revert(snap)
+    except (AdapterError, AdapterNotLive):
+        return  # refusing is an honest outcome
+
+    for key, content in before.items():
+        p = Path(key)
+        # An adapter that deletes a file it never captured is doing the same damage as
+        # one that overwrites it, and the failure has to read as a rule violation rather
+        # than as a FileNotFoundError escaping the test.
+        assert p.exists(), (
+            f"{adapter.name}: {p} was declared as its own, but a file already there is "
+            "user state — revert() removed a file snapshot() had not captured"
+        )
+        assert p.read_bytes() == content, (
+            f"{adapter.name}: {p} was declared as its own, but a file already there is "
+            "user state — snapshot() did not capture it and revert() did not put it back"
+        )
 
 
 def test_revert_refuses_an_empty_snapshot(adapter: Adapter) -> None:

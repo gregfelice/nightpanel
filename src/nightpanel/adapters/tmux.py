@@ -50,9 +50,10 @@ class TmuxAdapter(Adapter):
         return bool(shutil.which("tmux"))
 
     def own_paths(self) -> list[Path]:
-        # The overlay is ours: rendered from the palette on every apply, so there is
-        # no user state in it to put back. The user's live options are the state, and
-        # snapshot() captures those.
+        # The overlay is ours when we created it: rendered from the palette on every
+        # apply, so there is no user state in it to put back. A file already standing
+        # there is user state whatever this declaration says, so snapshot() captures
+        # it. The user's live options are the other state.
         return [self._overlay]
 
     def snapshot(self) -> dict:
@@ -61,8 +62,15 @@ class TmuxAdapter(Adapter):
         A ``None`` value means "no live tmux server, nothing to capture" — that
         is an honest answer. An empty dict is not, which is what this adapter
         used to return.
+
+        The overlay file is captured too, because ownership is a claim about what this
+        adapter created and not about what is standing at the path: a file already
+        there is user state, and revert cannot put it back unless it was recorded.
         """
-        return {opt: self.run(["tmux", "show", "-gv", opt]) for opt in _OPTIONS}
+        return {
+            "options": {opt: self.run(["tmux", "show", "-gv", opt]) for opt in _OPTIONS},
+            "own": self.capture_own_paths(),
+        }
 
     def apply(self, palette: Palette) -> None:
         self.write(self._overlay, _renderer.render(palette))
@@ -74,17 +82,19 @@ class TmuxAdapter(Adapter):
         )
 
     def revert(self, snapshot: dict) -> None:
-        if not snapshot:
+        options = snapshot.get("options") or {}
+        if not options:
             # Re-sourcing ~/.tmux.conf is not restoration; it is a guess, and it
             # overwrites options the user set by hand. Refuse instead.
             raise AdapterError(f"{self.name}: no capture; refusing to revert on a guess")
-        for opt, value in snapshot.items():
+        for opt, value in options.items():
             if value is None:
                 continue  # nothing was live to capture, nothing to put back
             self.run_optional(
                 ["tmux", "set", "-g", opt, value],
                 "no tmux server running; the captured value cannot be applied",
             )
+        self.restore_own_paths(snapshot)
 
     def verify(self, expected: Literal["on", "off"]) -> bool:
         live = self.run(["tmux", "show", "-gv", "status-style"]) or ""

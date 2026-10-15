@@ -134,7 +134,8 @@ class FirefoxAdapter(Adapter):
         return [profile / "chrome" / "userChrome.css", profile / "user.js"]
 
     def own_paths(self) -> list[Path]:
-        # The command file is ours: it is the extension's inbox, not user state.
+        # The command file is ours when we created it: it is the extension's inbox.
+        # A file already standing there is user state, so snapshot() captures it.
         return [self._command_file]
 
     def snapshot(self) -> dict:
@@ -145,6 +146,7 @@ class FirefoxAdapter(Adapter):
         return {
             "profile": str(profile) if profile else None,
             "files": {str(p): self.capture(p) for p in self.restorable_paths()},
+            "own": self.capture_own_paths(),
         }
 
     def apply(self, palette: Palette) -> None:
@@ -166,12 +168,13 @@ class FirefoxAdapter(Adapter):
         if not snapshot:
             raise AdapterError(f"{self.name}: no capture; refusing to revert on a guess")
         files = snapshot.get("files") or {}
-        if not files:
-            # The capture exists and recorded no profile: nothing was written, so
-            # there is nothing to put back. That is an answer, not a guess.
-            return
+        # A capture that recorded no profile means nothing was written, so there is
+        # nothing to put back. That is an answer, not a guess.
         for path in [Path(p) for p in files]:
             self.restore(path, files[str(path)])
+        # The command file is ours only if we created it; a file that was already
+        # there is user state and goes back.
+        self.restore_own_paths(snapshot)
 
     def verify(self, expected: Literal["on", "off"]) -> bool:
         try:

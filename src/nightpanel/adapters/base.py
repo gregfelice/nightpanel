@@ -137,6 +137,12 @@ class Adapter(ABC):
         Declared rather than commented, so the battery can check that every file an
         adapter writes is either restorable or explicitly ours. A file that is neither is
         a user file written without a capture that could put it back.
+
+        The declaration is a claim about files this adapter created, not about whatever
+        happens to be standing at those paths. A file that already exists when
+        `snapshot()` runs is user state whatever the declaration claims, so it must be
+        captured — or the adapter must refuse. `capture_own_paths()` is the capture half
+        of that promise, and the battery checks the round trip.
         """
         return []
 
@@ -237,6 +243,28 @@ class Adapter(ABC):
                     path.chmod(captured["mode"])
         except OSError as e:
             raise AdapterError(f"{self.name}: could not restore {path}: {e}") from e
+
+    def capture_own_paths(self) -> dict[str, dict]:
+        """Capture every declared own path that already exists.
+
+        `own_paths()` excuses overwriting a file this adapter created; it does not
+        excuse overwriting a file that was already there. A file standing at a
+        declared own path when `snapshot()` runs is user state, so revert cannot put
+        it back unless the snapshot recorded it. An adapter that cannot capture it
+        has to refuse.
+        """
+        return {str(p): self.capture(p) for p in self.own_paths()}
+
+    def restore_own_paths(self, snapshot: dict) -> None:
+        """Put back the own-path captures that recorded a pre-existing file.
+
+        A capture with `existed: False` is a file this adapter created itself, and
+        there is nothing in it to put back; restoring that capture would delete our
+        own work. Only a capture that found a file is user state.
+        """
+        for key, captured in (snapshot.get("own") or {}).items():
+            if captured.get("existed"):
+                self.restore(Path(key), captured)
 
     def read_text(self, path: Path) -> str:
         """Read a file as text, raising rather than crashing.

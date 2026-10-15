@@ -38,6 +38,7 @@ The rules, as they are now checkable:
 | Paths are injected | Module-level `Path.home()` or an absolute path literal in an adapter. Everything the adapter writes comes from the injected `Paths`. |
 | Palette is the source of truth | A hex literal in an adapter. |
 | The round trip is byte-for-byte | A declared path whose content, existence, mode, or symlink-ness changes across apply → revert. |
+| An own path is ours only when we created it | A file already standing at a declared `own_paths()` entry — overwritten without a capture that could put it back, or removed by a revert that never captured it. Declaring a path as ours is a claim about what the adapter created, not about what is standing at the path. |
 | The battery is not a ceremony | A deliberately bad adapter (`tests/invariants/test_battery_self_check.py`) must fail the same checks that the real adapters pass. |
 
 Two consequences that were not obvious when the rules were written:
