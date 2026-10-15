@@ -50,9 +50,31 @@ Two findings the stateful runner produced that the review did not predict:
   palette can tell that a *different* palette was applied. A rule that checks nothing is a
   preference, so the battery names which adapters it cannot check.
 
+## PR description
+
+Written from the measurements above only, in the form `230-git-procedures-playbook.md` §2
+requires. It lives here because a description that lives only in a transcript is lost with the
+session — which is what happened to the plan this page replaces.
+
+> Contract invariants enforced at runtime, not in prose. The ruling is ADR-001; the reviewer
+> should look at the battery in `tests/invariants/`, which is the enforcement, and at the one
+> behaviour change outside it: `toggle.py` now records a refused state write as a decision and
+> exits non-zero instead of raising.
+>
+> Battery: 208 passed + 8 skipped, plus 10 self-checks that prove each rule bites on a
+> deliberately bad adapter. Full suite 687 passed, 8 skipped. The 8 skips are the palette rule,
+> scoped to the adapters that can answer it (tmux alone); each names its adapter and the reason.
+>
+> Findings 1–5, 7 and 8 are fixed. Finding 6 is unreconcilable: the plan it referred to was a
+> session transcript, not a file, so its baseline numbers have no surviving source. Every figure
+> here is measured, on 2026-10-14.
+>
+> Not run here: `bin/validate`, which runs in CI's proof job. `ruff check` and
+> `ruff format --check` are clean on the branch.
+
 ## Remaining work
 
-1. PR description, written from the measurements above only.
+1. Push the branch and open the pull request against `master` with the description above.
 2. Rendering adapter and orchestrator failures in the UI — tracked in `docs/BACKLOG.md`. The
    entry point side is settled: `toggle.py` records a refused state write as a decision and
    exits non-zero, because `bin/analyze-toggle-log` only counts invocations that produced a
