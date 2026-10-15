@@ -13,4 +13,4 @@ if [[ ! -x "$VENV/bin/python" ]]; then
     exit 1
 fi
 
-exec env PYTHONPATH=src "$VENV/bin/python" -m pytest tests/unit/ "$@"
+exec env PYTHONPATH=src "$VENV/bin/python" -m pytest tests/unit/ tests/invariants/ "$@"
