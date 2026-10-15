@@ -105,9 +105,9 @@ def env(paths: Paths, runner: RecordingRunner):
     runner.answers[("gsettings", "get", "io.github.gregfelice.Nightpanel", "theme-brightness")] = (
         "0.6"
     )
-    runner.answers[
-        ("gsettings", "get", "io.github.gregfelice.Nightpanel", "video-brightness")
-    ] = "0.5"
+    runner.answers[("gsettings", "get", "io.github.gregfelice.Nightpanel", "video-brightness")] = (
+        "0.5"
+    )
     return SimpleNamespace(
         paths=paths,
         runner=runner,

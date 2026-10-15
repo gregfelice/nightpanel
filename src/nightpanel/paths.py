@@ -46,9 +46,7 @@ class Paths:
     def __post_init__(self) -> None:
         home = Path(self.home)
         object.__setattr__(self, "home", home)
-        object.__setattr__(
-            self, "config", Path(self.config) if self.config else home / ".config"
-        )
+        object.__setattr__(self, "config", Path(self.config) if self.config else home / ".config")
         object.__setattr__(
             self, "data", Path(self.data) if self.data else home / ".local" / "share"
         )

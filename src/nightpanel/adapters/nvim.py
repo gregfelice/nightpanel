@@ -49,7 +49,9 @@ class NvimAdapter(Adapter):
     def revert(self, snapshot: dict) -> None:
         captured = snapshot.get("file")
         if not captured:
-            raise AdapterError(f"{self.name}: no capture for {self._after_plugin}; refusing to revert")
+            raise AdapterError(
+                f"{self.name}: no capture for {self._after_plugin}; refusing to revert"
+            )
         self.restore(self._after_plugin, captured)
         prev = snapshot.get("colorscheme") or _DEFAULT_CS
         self._send_cmd(f"colorscheme {prev}")

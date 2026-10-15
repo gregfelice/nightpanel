@@ -207,9 +207,7 @@ class Adapter(ABC):
         Refuses on an empty or incomplete capture rather than guessing.
         """
         if not captured or "existed" not in captured:
-            raise AdapterError(
-                f"{self.name}: no capture for {path}; refusing to revert on a guess"
-            )
+            raise AdapterError(f"{self.name}: no capture for {path}; refusing to revert on a guess")
         # The capture records where it came from. If the caller asks for a
         # different file, the snapshot is not the one this path belongs to —
         # most likely a state file written by an older version or a renamed

@@ -220,4 +220,6 @@ fi
         try:
             self._wrapper.chmod(0o755)
         except OSError as e:
-            raise AdapterError(f"{self.name}: could not make {self._wrapper} executable: {e}") from e
+            raise AdapterError(
+                f"{self.name}: could not make {self._wrapper} executable: {e}"
+            ) from e

@@ -103,7 +103,12 @@ def test_find_stale_skips_claude_without_colorterm(env) -> None:
 
 
 def test_find_stale_ignores_non_claude_processes(env) -> None:
-    _pid(env, 5000, b"/usr/bin/python3\x00script.py\x00", b"COLORTERM=truecolor\x00TERM=alacritty\x00")
+    _pid(
+        env,
+        5000,
+        b"/usr/bin/python3\x00script.py\x00",
+        b"COLORTERM=truecolor\x00TERM=alacritty\x00",
+    )
     _pid(env, 5001, b"/usr/bin/firefox\x00", b"COLORTERM=truecolor\x00")
 
     stale = ClaudeCodeAdapter(paths=env.paths, runner=env.runner)._find_stale_claude_pids(
