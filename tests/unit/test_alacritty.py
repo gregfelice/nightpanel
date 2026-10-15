@@ -4,14 +4,25 @@
 Regression: the old regex adapter only understood single-line
 ``import = ["…"]`` and corrupted the multi-line array form on apply/revert,
 leaving invalid TOML that alacritty refused to load.
+
+Migrated from monkeypatching module-level path constants to injected
+``Paths``/``Runner`` (see tests/conftest.py): the adapter's files land under the
+fixture, and the corrupt-file test asserts the refusal the adapter now makes
+instead of the silent overwrite it used to perform.
 """
 
+from __future__ import annotations
+
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 
 from nightpanel.adapters.alacritty import AlacrittyAdapter
+from nightpanel.adapters.base import AdapterError
 from nightpanel.palette import NIGHTPANEL
+from nightpanel.paths import Paths
+from nightpanel.runner import RecordingRunner
 
 _MULTILINE = """\
 [general]
@@ -33,12 +44,13 @@ size = 12.0
 
 
 @pytest.fixture
-def cfg(tmp_path, monkeypatch):
-    path = tmp_path / "alacritty.toml"
-    theme = tmp_path / "themes" / "themes" / "nightpanel.toml"
-    monkeypatch.setattr("nightpanel.adapters.alacritty._CFG", path)
-    monkeypatch.setattr("nightpanel.adapters.alacritty._NP_THEME", theme)
-    return path, theme
+def env(paths: Paths, runner: RecordingRunner):
+    return SimpleNamespace(
+        paths=paths,
+        runner=runner,
+        cfg=paths.config / "alacritty" / "alacritty.toml",
+        theme=paths.config / "alacritty" / "themes" / "themes" / "nightpanel.toml",
+    )
 
 
 def _parses(path):
@@ -47,30 +59,28 @@ def _parses(path):
 
 
 @pytest.mark.parametrize("original", [_MULTILINE, _SINGLE_LINE], ids=["multiline", "single"])
-def test_apply_revert_round_trip_preserves_import(cfg, original):
-    path, theme = cfg
-    path.write_text(original)
-    adapter = AlacrittyAdapter()
+def test_apply_revert_round_trip_preserves_import(env, original):
+    env.cfg.write_text(original)
+    adapter = AlacrittyAdapter(paths=env.paths, runner=env.runner)
 
     # Orchestrator snapshots BEFORE apply, then reverts with that snapshot.
     snap = adapter.snapshot()
     assert snap["import"] == ["~/.config/alacritty/themes/themes/ayu_dark.toml"]
 
     adapter.apply(NIGHTPANEL)
-    applied = _parses(path)  # must stay valid TOML — the old bug failed here
-    assert applied["general"]["import"] == [str(theme)]
+    applied = _parses(env.cfg)  # must stay valid TOML — the old bug failed here
+    assert applied["general"]["import"] == [str(env.theme)]
     assert adapter.verify("on")
 
     adapter.revert(snap)
-    reverted = _parses(path)
+    reverted = _parses(env.cfg)
     assert reverted["general"]["import"] == ["~/.config/alacritty/themes/themes/ayu_dark.toml"]
     assert adapter.verify("off")
 
 
-def test_revert_with_no_prior_import_removes_key(cfg):
-    path, _ = cfg
-    path.write_text("[general]\n\n[window]\npadding = { x = 12, y = 12 }\n")
-    adapter = AlacrittyAdapter()
+def test_revert_with_no_prior_import_removes_key(env):
+    env.cfg.write_text("[general]\n\n[window]\npadding = { x = 12, y = 12 }\n")
+    adapter = AlacrittyAdapter(paths=env.paths, runner=env.runner)
 
     snap = adapter.snapshot()
     assert snap["import"] is None
@@ -79,16 +89,25 @@ def test_revert_with_no_prior_import_removes_key(cfg):
     assert adapter.verify("on")
 
     adapter.revert(snap)
-    data = _parses(path)
+    data = _parses(env.cfg)
     assert "import" not in data.get("general", {})
     assert adapter.verify("off")
 
 
-def test_corrupt_config_snapshot_is_safe(cfg):
-    """A pre-existing broken file must not crash snapshot()/verify()."""
-    path, _ = cfg
-    path.write_text('[general]\n    "orphaned.toml"\n]\n')
-    adapter = AlacrittyAdapter()
+def test_corrupt_config_refuses_to_read(env):
+    """A pre-existing broken file is a real failure, not a silent no-op: the
+    old behaviour let apply() overwrite an unreadable file, destroying the
+    user's config. The adapter now refuses, so this asserts the refusal."""
+    env.cfg.write_text('[general]\n    "orphaned.toml"\n]\n')
+    adapter = AlacrittyAdapter(paths=env.paths, runner=env.runner)
 
-    assert adapter.snapshot() == {"import": None}
-    assert adapter.verify("off") is True
+    with pytest.raises(AdapterError, match="unreadable"):
+        adapter.snapshot()
+    with pytest.raises(AdapterError, match="unreadable"):
+        adapter.verify("off")
+
+
+def test_revert_refuses_an_empty_snapshot(env):
+    adapter = AlacrittyAdapter(paths=env.paths, runner=env.runner)
+    with pytest.raises(AdapterError, match="refusing"):
+        adapter.revert({})
