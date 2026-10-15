@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Firefox adapter — writes the command JSON the native host polls, plus
 manages userChrome.css and the user.js pref block (the chrome styling and
-session prefs absorbed from the retired slimfox project)."""
+session prefs absorbed from the retired slimfox project).
+
+Revert restores userChrome.css and user.js byte-for-byte. The previous version
+returned an empty snapshot and left both files in place with a comment saying
+chrome styling "is not a per-toggle concern" — but apply() writes them, so they
+are user state this adapter mutates and must put back. The command file is our
+own artifact and is not restorable.
+"""
 
 from __future__ import annotations
 
 import configparser
 import json
-import logging
-import subprocess
 from pathlib import Path
 from typing import Literal
 
 from ..palette import Palette
 from ..renderers import firefox_chrome as _chrome_renderer
-from .base import Adapter
+from .base import Adapter, AdapterError
 
-_LOG = logging.getLogger(__name__)
-
-_COMMAND_FILE = Path.home() / ".config" / "nightpanel" / "np-command.json"
-_FF_ROOT = Path.home() / ".mozilla" / "firefox"
 _CHROME_PREF = "toolkit.legacyUserProfileCustomizations.stylesheets"
 
 _MARK_BEGIN = "/* >>> nightpanel managed — do not edit between markers <<< */"
@@ -67,7 +68,7 @@ def _strip_managed_block(text: str) -> str:
     return "".join(out)
 
 
-def find_default_profile(ff_root: Path = _FF_ROOT) -> Path | None:
+def find_default_profile(ff_root: Path) -> Path | None:
     """Locate the default Firefox profile dir from ``profiles.ini``.
 
     Priority (matches what Firefox itself picks):
@@ -84,8 +85,9 @@ def find_default_profile(ff_root: Path = _FF_ROOT) -> Path | None:
     try:
         cp.read(ini)
     except configparser.Error as e:
-        _LOG.debug("nightpanel: profiles.ini parse failed: %s", e)
-        return None
+        # A profiles.ini that cannot be parsed is a real failure: guessing which
+        # profile is the default would write into the wrong profile.
+        raise AdapterError(f"firefox: profiles.ini unreadable: {e}") from e
 
     def _resolve(rel_or_abs: str) -> Path:
         p = Path(rel_or_abs)
@@ -105,54 +107,48 @@ def find_default_profile(ff_root: Path = _FF_ROOT) -> Path | None:
     return None
 
 
-def _run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-
-
-def _read_brightness() -> float:
-    """Read brightness from gsettings; clamp to a sane range."""
-    try:
-        r = _run(["gsettings", "get", "io.github.gregfelice.Nightpanel", "theme-brightness"])
-        if r.returncode == 0:
-            return max(0.3, min(1.5, float(r.stdout.strip())))
-    except Exception:
-        pass
-    return 0.9
-
-
-def _read_video_brightness() -> float:
-    """Read the dedicated <video> brightness from gsettings; clamp to range.
-
-    Crash-safe via subprocess (unlike in-process Gio.Settings.get_double, which
-    aborts the process on a missing key): if the schema predates this key,
-    `gsettings get` returns non-zero and we fall back to 1.0 (untouched)."""
-    try:
-        r = _run(["gsettings", "get", "io.github.gregfelice.Nightpanel", "video-brightness"])
-        if r.returncode == 0:
-            return max(0.1, min(1.0, float(r.stdout.strip())))
-    except Exception:
-        pass
-    return 1.0
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
 
 
 class FirefoxAdapter(Adapter):
     name = "firefox"
+
+    @property
+    def _command_file(self) -> Path:
+        return self.paths.nightpanel / "np-command.json"
+
+    @property
+    def _ff_root(self) -> Path:
+        return self.paths.home / ".mozilla" / "firefox"
 
     def installed(self) -> bool:
         # The extension may be installed even when firefox isn't running, and
         # the command file is harmless if nothing reads it. Always engage.
         return True
 
+    def restorable_paths(self) -> list[Path]:
+        profile = find_default_profile(self._ff_root)
+        if profile is None or not profile.exists():
+            return []
+        return [profile / "chrome" / "userChrome.css", profile / "user.js"]
+
     def snapshot(self) -> dict:
-        # The extension reverts via the next command; nothing to capture here.
-        return {}
+        # The profile is part of the capture: without it, an empty `files` could
+        # mean "no profile existed" or "we never looked", and those are different
+        # things to a revert.
+        profile = find_default_profile(self._ff_root)
+        return {
+            "profile": str(profile) if profile else None,
+            "files": {str(p): self.capture(p) for p in self.restorable_paths()},
+        }
 
     def apply(self, palette: Palette) -> None:
-        self._write(
+        self._write_command(
             {
                 "action": "apply",
-                "brightness": _read_brightness(),
-                "videoBrightness": _read_video_brightness(),
+                "brightness": self._brightness(),
+                "videoBrightness": self._video_brightness(),
             }
         )
         # Re-sync userChrome.css from the palette on every apply so palette
@@ -162,46 +158,59 @@ class FirefoxAdapter(Adapter):
         self._install_user_chrome(palette)
 
     def revert(self, snapshot: dict) -> None:
-        self._write({"action": "revert", "brightness": 0.9})
-        # Leave userChrome.css in place — it's not a per-toggle concern. To
-        # fully revert chrome styling, remove the file and strip the managed
-        # block from user.js. (The old slimfox uninstall script is gone.)
+        self._write_command({"action": "revert", "brightness": 0.9})
+        if not snapshot:
+            raise AdapterError(f"{self.name}: no capture; refusing to revert on a guess")
+        files = snapshot.get("files") or {}
+        if not files:
+            # The capture exists and recorded no profile: nothing was written, so
+            # there is nothing to put back. That is an answer, not a guess.
+            return
+        for path in [Path(p) for p in files]:
+            self.restore(path, files[str(path)])
 
     def verify(self, expected: Literal["on", "off"]) -> bool:
         try:
-            cmd = json.loads(_COMMAND_FILE.read_text())
+            cmd = json.loads(self.read_text(self._command_file))
         except (OSError, json.JSONDecodeError):
             return expected == "off"
         on = cmd.get("action") == "apply"
         return on if expected == "on" else not on
 
     # ── helpers ──
-    def _write(self, payload: dict) -> None:
+    def _brightness(self) -> float:
+        """Read brightness from gsettings; clamp to a sane range."""
+        raw = self.run(["gsettings", "get", "io.github.gregfelice.Nightpanel", "theme-brightness"])
         try:
-            _COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _COMMAND_FILE.write_text(json.dumps(payload))
-        except OSError as e:
-            _LOG.warning("nightpanel: firefox command write failed: %s", e)
+            return _clamp(float(raw), 0.3, 1.5)
+        except (TypeError, ValueError):
+            return 0.9
+
+    def _video_brightness(self) -> float:
+        """Read the dedicated <video> brightness from gsettings; clamp to range.
+
+        Read through the Runner rather than in-process Gio.Settings.get_double,
+        which aborts the process on a missing key. If the schema predates this
+        key the read returns non-zero and we fall back to 1.0 (untouched)."""
+        raw = self.run(["gsettings", "get", "io.github.gregfelice.Nightpanel", "video-brightness"])
+        try:
+            return _clamp(float(raw), 0.1, 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _write_command(self, payload: dict) -> None:
+        self.write(self._command_file, json.dumps(payload))
 
     def _install_user_chrome(self, palette: Palette) -> None:
         """Write userChrome.css from the palette and ensure the FF pref that
         lets userChrome load is set. Replaces the old slimfox installer."""
-        profile = find_default_profile()
+        profile = find_default_profile(self._ff_root)
         if profile is None or not profile.exists():
-            _LOG.debug("nightpanel: no Firefox profile found, skipping userChrome")
+            self._log.debug("nightpanel: no Firefox profile found, skipping userChrome")
             return
         user_chrome = profile / "chrome" / "userChrome.css"
         user_js = profile / "user.js"
-        try:
-            user_chrome.parent.mkdir(parents=True, exist_ok=True)
-            user_chrome.write_text(_chrome_renderer.render(palette))
-        except OSError as e:
-            _LOG.warning("nightpanel: userChrome.css write failed: %s", e)
-            return
-        try:
-            existing = user_js.read_text() if user_js.exists() else ""
-            desired = _strip_managed_block(existing).rstrip("\n") + "\n" + _MANAGED_PREFS
-            if desired != existing:
-                user_js.write_text(desired)
-        except OSError as e:
-            _LOG.warning("nightpanel: user.js update failed: %s", e)
+        self.write(user_chrome, _chrome_renderer.render(palette))
+        existing = self.read_text(user_js) if user_js.exists() else ""
+        desired = _strip_managed_block(existing).rstrip("\n") + "\n" + _MANAGED_PREFS
+        self.write(user_js, desired)

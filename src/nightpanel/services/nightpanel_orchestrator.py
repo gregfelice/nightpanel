@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
 from pathlib import Path
+from subprocess import CompletedProcess
 from typing import Literal
 
 from ..adapters import (
@@ -28,21 +28,26 @@ from ..adapters import (
     NvimAdapter,
     TmuxAdapter,
 )
+from ..adapters.base import AdapterError, AdapterNotLive
 from ..adapters.firefox import find_default_profile as _find_ff_profile
 from ..palette import NIGHTPANEL, Palette
+from ..paths import Paths
+from ..runner import Runner, SubprocessRunner
 
 _LOG = logging.getLogger(__name__)
 
-_STATE_PATH = Path.home() / ".config" / "nightpanel" / "nightpanel-state.json"
-_ACTIVE_FILE = Path.home() / ".config" / "nightpanel" / "nightpanel-active"
-_NP_COMMAND = Path.home() / ".config" / "nightpanel" / "np-command.json"
-
-# Firefox bridge install paths
+# Source files that ship with the package — these are not user paths, so they
+# stay module-level. Everything the orchestrator *writes* is resolved through
+# the injected Paths (see paths.py): the import-time Path.home() constants here
+# were the same bug class the adapters were rebuilt to remove, and they could
+# disagree with the adapters about where the config dir is.
 _NP_HOST_SRC = Path(__file__).parent / "np-host.py"
-_NP_HOST_DEST = Path.home() / ".config" / "nightpanel" / "np-host.py"
-_NM_MANIFEST = Path.home() / ".mozilla" / "native-messaging-hosts" / "nightpanel.json"
 _EXT_SRC = Path(__file__).parent / "firefox-extension"
 _EXT_ID = "nightpanel-bridge@nightpanel"
+
+# Read-only system location, not a user path: the ghost-prune check looks here
+# as well as in the user prefix. Nothing is written to it.
+_SYSTEM_EXT_DIR = Path("/usr/share/gnome-shell/extensions")
 
 # Security implication shown when the user requests Firefox bridge install.
 _FF_CONSENT_TEXT = """\
@@ -63,52 +68,92 @@ To opt in, pass confirmed=True to install_bridge(), e.g.:
 Default install does NOT touch Firefox."""
 
 
-def _run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-
-
 class NightpanelOrchestrator:
     """Toggles nightpanel by driving a list of Adapters.
 
     Call ``apply()`` to engage, ``revert()`` to disengage, ``verify(expected)``
     to confirm each adapter is in the expected state. Pass a custom Palette
     to ``apply()`` to test alternate color schemes.
+
+    ``paths`` and ``runner`` are injected for the same reason the adapters take
+    them: without injection the state file and ACTIVE_FILE live in the
+    developer's home during tests, and the XDG layout is wrong by construction.
     """
 
-    def __init__(self, palette: Palette = NIGHTPANEL, adapters: list[Adapter] | None = None):
+    def __init__(
+        self,
+        palette: Palette = NIGHTPANEL,
+        adapters: list[Adapter] | None = None,
+        paths: Paths | None = None,
+        runner: Runner | None = None,
+    ):
+        self.paths = paths or Paths.detect()
+        self.runner = runner or SubprocessRunner()
         self.palette = palette
         self.adapters: list[Adapter] = (
             adapters
             if adapters is not None
             else [
-                AlacrittyAdapter(),
-                TmuxAdapter(),
-                NvimAdapter(),
-                EmacsAdapter(),
-                ClaudeCodeAdapter(),
-                GeminiCliAdapter(),
-                GnomeAdapter(),
-                FirefoxAdapter(),
-                GwsAdapter(),
+                AlacrittyAdapter(paths=self.paths, runner=self.runner),
+                TmuxAdapter(paths=self.paths, runner=self.runner),
+                NvimAdapter(paths=self.paths, runner=self.runner),
+                EmacsAdapter(paths=self.paths, runner=self.runner),
+                ClaudeCodeAdapter(paths=self.paths, runner=self.runner),
+                GeminiCliAdapter(paths=self.paths, runner=self.runner),
+                GnomeAdapter(paths=self.paths, runner=self.runner),
+                FirefoxAdapter(paths=self.paths, runner=self.runner),
+                GwsAdapter(paths=self.paths, runner=self.runner),
             ]
         )
+
+    # ── Resolved user paths ───────────────────────────────────────
+
+    @property
+    def _state_path(self) -> Path:
+        return self.paths.nightpanel / "nightpanel-state.json"
+
+    @property
+    def _active_file(self) -> Path:
+        return self.paths.nightpanel / "nightpanel-active"
+
+    @property
+    def _np_command(self) -> Path:
+        return self.paths.nightpanel / "np-command.json"
+
+    @property
+    def _np_host_dest(self) -> Path:
+        return self.paths.nightpanel / "np-host.py"
+
+    @property
+    def _nm_manifest(self) -> Path:
+        return self.paths.home / ".mozilla" / "native-messaging-hosts" / "nightpanel.json"
+
+    @property
+    def _ff_root(self) -> Path:
+        return self.paths.home / ".mozilla" / "firefox"
+
+    def _run(self, cmd: list[str]) -> CompletedProcess[str]:
+        return self.runner.run(cmd)
 
     # ── Public API ────────────────────────────────────────────────
 
     def apply(self) -> dict[str, bool]:
         """Snapshot current state then apply nightpanel via every adapter.
 
-        Returns a ``{adapter_name: success}`` dict. ACTIVE_FILE is only
-        touched if at least one adapter succeeded — otherwise the state
-        machine would lie about being on while nothing changed.
+        Returns a ``{adapter_name: success}`` dict. ACTIVE_FILE is only touched
+        when every stateful adapter both captured and applied — otherwise the
+        state machine claims "on" while some tools hold a baseline they cannot
+        put back.
         """
+        active = self._active_adapters()
+
         # Only snapshot if not already engaged — protects against double-apply
         # corrupting the saved baseline. Defense in depth: if ACTIVE_FILE went
         # missing while the world is still in nightpanel state (interrupted
         # revert, manual cleanup), trust the existing snapshot over the live
         # world, otherwise we'd capture the applied palette as the baseline.
-        if not _ACTIVE_FILE.exists():
-            verdict = {a.name: a.verify("on") for a in self._active_adapters()}
+        if not self._active_file.exists():
+            verdict = {a.name: a.verify("on") for a in active}
             already_on = {k: v for k, v in verdict.items() if v}
             if already_on:
                 _LOG.warning(
@@ -116,32 +161,56 @@ class NightpanelOrchestrator:
                     "already-on (%s) — keeping existing snapshot",
                     already_on,
                 )
+                captured = self._load_state()
             else:
-                state = {a.name: a.snapshot() for a in self._active_adapters()}
-                self._save_state(state)
+                captured = {}
+                for a in active:
+                    try:
+                        captured[a.name] = a.snapshot()
+                    except AdapterError as e:
+                        # A half-collected snapshot is not a baseline. Record the
+                        # gap explicitly so the apply loop below can refuse for
+                        # that adapter instead of guessing on revert.
+                        _LOG.error("nightpanel: %s capture failed: %s", a.name, e)
+                        captured[a.name] = None
+                self._save_state({k: v for k, v in captured.items() if v})
+        else:
+            captured = self._load_state()
 
         outcomes: dict[str, bool] = {}
-        for a in self._active_adapters():
+        for a in active:
+            if a.stateful and captured.get(a.name) is None:
+                # No baseline for this adapter: applying would create state we
+                # have no record of, and revert would then have to guess.
+                outcomes[a.name] = False
+                continue
             try:
                 a.apply(self.palette)
                 outcomes[a.name] = True
-            except Exception as e:
-                _LOG.warning("nightpanel: %s apply failed: %s", a.name, e)
+            except AdapterNotLive as e:
+                # The tool is not running. The file state is correct at rest and
+                # the tool picks it up on next start — an outcome, not a success.
+                _LOG.info("nightpanel: %s not live: %s", a.name, e)
+                outcomes[a.name] = False
+            except AdapterError as e:
+                _LOG.error("nightpanel: %s apply failed: %s", a.name, e)
                 outcomes[a.name] = False
 
-        if any(outcomes.values()):
-            _ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _ACTIVE_FILE.touch()
+        stateful_failed = [a.name for a in active if a.stateful and not outcomes.get(a.name)]
+        if not stateful_failed and any(outcomes.values()):
+            self._active_file.parent.mkdir(parents=True, exist_ok=True)
+            self._active_file.touch()
         else:
             _LOG.error(
-                "nightpanel: every adapter failed during apply() — not marking "
-                "ACTIVE_FILE so state machine doesn't lie. Outcomes: %s",
+                "nightpanel: not marking ACTIVE_FILE — stateful adapters failed: %s. "
+                "Outcomes: %s",
+                stateful_failed,
                 outcomes,
             )
         return outcomes
 
-    def revert(self) -> None:
-        """Restore every adapter to its pre-apply state.
+    def revert(self) -> dict[str, bool]:
+        """Restore every adapter to its pre-apply state. Returns outcomes.
 
         ACTIVE_FILE is unlinked BEFORE the adapter reverts run, not after.
         Reason: adapter reverts take real time (gsettings round-trips, file
@@ -154,13 +223,20 @@ class NightpanelOrchestrator:
         was open emitting brightness-slider events on GTK re-layout.
         Unlinking first closes the race.
         """
-        _ACTIVE_FILE.unlink(missing_ok=True)
+        self._active_file.unlink(missing_ok=True)
         state = self._load_state()
+        outcomes: dict[str, bool] = {}
         for a in self._active_adapters():
             try:
                 a.revert(state.get(a.name, {}))
-            except Exception as e:
-                _LOG.warning("nightpanel: %s revert failed: %s", a.name, e)
+                outcomes[a.name] = True
+            except AdapterNotLive as e:
+                _LOG.info("nightpanel: %s not live during revert: %s", a.name, e)
+                outcomes[a.name] = False
+            except AdapterError as e:
+                _LOG.error("nightpanel: %s revert failed: %s", a.name, e)
+                outcomes[a.name] = False
+        return outcomes
 
     def verify(self, expected: Literal["on", "off"]) -> dict[str, bool]:
         """Return ``{adapter_name: matches_expected}`` for every active adapter."""
@@ -174,7 +250,7 @@ class NightpanelOrchestrator:
         the system theme (e.g. re-apply on launch) — distinct from the in-app
         GTK theme flag, which only styles the config window itself.
         """
-        return _ACTIVE_FILE.exists()
+        return self._active_file.exists()
 
     _BRIGHTNESS_MIN_INTERVAL = 0.1  # seconds; rate-limit FF command writes to 10/s
 
@@ -190,7 +266,7 @@ class NightpanelOrchestrator:
         "cycling" of page brightness when the slider gets even a hint
         of wheel input from anywhere on its surrounding row.
         """
-        if not _ACTIVE_FILE.exists():
+        if not self._active_file.exists():
             return
         import time
 
@@ -199,8 +275,8 @@ class NightpanelOrchestrator:
             return
         self._last_brightness_write = now
         try:
-            _NP_COMMAND.parent.mkdir(parents=True, exist_ok=True)
-            _NP_COMMAND.write_text(json.dumps({"action": "apply", "brightness": brightness}))
+            self._np_command.parent.mkdir(parents=True, exist_ok=True)
+            self._np_command.write_text(json.dumps({"action": "apply", "brightness": brightness}))
         except OSError as e:
             _LOG.warning("nightpanel: brightness update failed: %s", e)
 
@@ -214,7 +290,7 @@ class NightpanelOrchestrator:
         _last_brightness_write would let a drag on one slider suppress writes
         from the other.
         """
-        if not _ACTIVE_FILE.exists():
+        if not self._active_file.exists():
             return
         import time
 
@@ -223,8 +299,8 @@ class NightpanelOrchestrator:
             return
         self._last_video_brightness_write = now
         try:
-            _NP_COMMAND.parent.mkdir(parents=True, exist_ok=True)
-            _NP_COMMAND.write_text(
+            self._np_command.parent.mkdir(parents=True, exist_ok=True)
+            self._np_command.write_text(
                 json.dumps({"action": "apply", "videoBrightness": video_brightness})
             )
         except OSError as e:
@@ -246,12 +322,7 @@ class NightpanelOrchestrator:
         changed = False
         ext_src = Path(__file__).parent.parent / "shell-extension" / "nightpanel@nightpanel"
         ext_dest = (
-            Path.home()
-            / ".local"
-            / "share"
-            / "gnome-shell"
-            / "extensions"
-            / "nightpanel@nightpanel"
+            self.paths.data / "gnome-shell" / "extensions" / "nightpanel@nightpanel"
         )
         try:
             if ext_src.exists() and ext_src != ext_dest:
@@ -261,7 +332,7 @@ class NightpanelOrchestrator:
                     if not dst.exists() or dst.read_bytes() != f.read_bytes():
                         shutil.copy2(f, dst)
                         changed = True
-            r = _run(["gnome-extensions", "enable", "nightpanel@nightpanel"])
+            r = self._run(["gnome-extensions", "enable", "nightpanel@nightpanel"])
             if r.returncode != 0:
                 _LOG.warning("nightpanel: gnome-extensions enable: %s", r.stderr.strip())
             else:
@@ -281,7 +352,7 @@ class NightpanelOrchestrator:
         Returns the number of ghosts removed.
         """
         try:
-            r = _run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"])
+            r = self._run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"])
             if r.returncode != 0:
                 return 0
             raw = r.stdout.strip().strip("[]")
@@ -290,8 +361,8 @@ class NightpanelOrchestrator:
             _LOG.debug("nightpanel: prune read failed: %s", e)
             return 0
 
-        home_ext = Path.home() / ".local" / "share" / "gnome-shell" / "extensions"
-        sys_ext = Path("/usr/share/gnome-shell/extensions")
+        home_ext = self.paths.data / "gnome-shell" / "extensions"
+        sys_ext = _SYSTEM_EXT_DIR
 
         keep, ghosts = [], []
         for ext in exts:
@@ -307,12 +378,17 @@ class NightpanelOrchestrator:
 
         new_list = "[" + ", ".join(f"'{e}'" for e in keep) + "]"
         try:
-            _run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", new_list])
+            r = self._run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", new_list])
+            if r.returncode != 0:
+                # The ghosts are still in the list; reporting the prune as done
+                # would be the same lie rule #1 forbids in the adapters.
+                _LOG.error("nightpanel: prune write failed: %s", r.stderr.strip() or "non-zero exit")
+                return 0
             _LOG.info(
                 "nightpanel: pruned %d ghost extension(s): %s", len(ghosts), ", ".join(ghosts)
             )
         except Exception as e:
-            _LOG.warning("nightpanel: prune write failed: %s", e)
+            _LOG.error("nightpanel: prune write failed: %s", e)
             return 0
         return len(ghosts)
 
@@ -329,7 +405,7 @@ class NightpanelOrchestrator:
         """
         if not confirmed:
             raise ConsentRequired(_FF_CONSENT_TEXT)
-        if _find_ff_profile() is None:
+        if _find_ff_profile(self._ff_root) is None:
             _LOG.warning("nightpanel: no Firefox profile found; bridge not installed")
             return False
         return self._install_native_host() | self._install_extension()
@@ -337,15 +413,15 @@ class NightpanelOrchestrator:
     # ── State persistence ────────────────────────────────────────
 
     def _save_state(self, state: dict) -> None:
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            _STATE_PATH.write_text(json.dumps(state, indent=2))
+            self._state_path.write_text(json.dumps(state, indent=2))
         except OSError as e:
             _LOG.warning("nightpanel: could not save state: %s", e)
 
     def _load_state(self) -> dict:
         try:
-            return json.loads(_STATE_PATH.read_text())
+            return json.loads(self._state_path.read_text())
         except (OSError, json.JSONDecodeError):
             return {}
 
@@ -356,25 +432,25 @@ class NightpanelOrchestrator:
 
     def _install_native_host(self) -> bool:
         try:
-            _NP_HOST_DEST.parent.mkdir(parents=True, exist_ok=True)
+            self._np_host_dest.parent.mkdir(parents=True, exist_ok=True)
             changed = (
-                not _NP_HOST_DEST.exists()
-                or _NP_HOST_DEST.read_bytes() != _NP_HOST_SRC.read_bytes()
+                not self._np_host_dest.exists()
+                or self._np_host_dest.read_bytes() != _NP_HOST_SRC.read_bytes()
             )
             if changed:
-                shutil.copy2(_NP_HOST_SRC, _NP_HOST_DEST)
-                _NP_HOST_DEST.chmod(0o755)
+                shutil.copy2(_NP_HOST_SRC, self._np_host_dest)
+                self._np_host_dest.chmod(0o755)
             manifest = {
                 "name": "nightpanel",
                 "description": "nightpanel bridge — connects nightpanel to Firefox",
-                "path": str(_NP_HOST_DEST),
+                "path": str(self._np_host_dest),
                 "type": "stdio",
                 "allowed_extensions": [_EXT_ID],
             }
             manifest_json = json.dumps(manifest, indent=2)
-            _NM_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-            if not _NM_MANIFEST.exists() or _NM_MANIFEST.read_text() != manifest_json:
-                _NM_MANIFEST.write_text(manifest_json)
+            self._nm_manifest.parent.mkdir(parents=True, exist_ok=True)
+            if not self._nm_manifest.exists() or self._nm_manifest.read_text() != manifest_json:
+                self._nm_manifest.write_text(manifest_json)
                 changed = True
             return changed
         except Exception as e:
@@ -382,7 +458,7 @@ class NightpanelOrchestrator:
             return False
 
     def _install_extension(self) -> bool:
-        profile = _find_ff_profile()
+        profile = _find_ff_profile(self._ff_root)
         if profile is None:
             _LOG.warning("nightpanel: no Firefox profile discovered, skipping extension")
             return False

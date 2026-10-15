@@ -6,11 +6,14 @@ than by regex. The regex approach only understood single-line
 ``import = ["…"]`` and silently corrupted the multi-line array form
 (``import = [\\n  "…"\\n]``): the strip matched just the ``import = [`` line and
 orphaned the array body, leaving invalid TOML that alacritty refused to load.
+
+Revert restores the captured file byte-for-byte. It refuses when there is no
+capture: an empty snapshot cannot tell "the user had no import list" from "we
+never looked", and the first reading would delete a user's import line.
 """
 
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -20,45 +23,44 @@ from tomlkit.exceptions import TOMLKitError
 
 from ..palette import Palette
 from ..renderers import alacritty as _renderer
-from .base import Adapter
+from .base import Adapter, AdapterError
 
-_LOG = logging.getLogger(__name__)
-
-_CFG = Path.home() / ".config" / "alacritty" / "alacritty.toml"
-_NP_THEME = Path.home() / ".config" / "alacritty" / "themes" / "themes" / "nightpanel.toml"
+_NP_THEME_NAME = "nightpanel.toml"
 
 
 class AlacrittyAdapter(Adapter):
     name = "alacritty"
 
+    @property
+    def _cfg(self) -> Path:
+        return self.paths.config / "alacritty" / "alacritty.toml"
+
+    @property
+    def _np_theme(self) -> Path:
+        return self.paths.config / "alacritty" / "themes" / "themes" / _NP_THEME_NAME
+
     def installed(self) -> bool:
-        return bool(shutil.which("alacritty")) or _CFG.exists()
+        return bool(shutil.which("alacritty")) or self._cfg.exists()
+
+    def restorable_paths(self) -> list[Path]:
+        # Only the user's file. The rendered theme is ours, regenerated on
+        # every apply; there is nothing to put back.
+        return [self._cfg]
 
     def snapshot(self) -> dict:
-        # list[str] | None — plain strings so it serializes into the JSON state.
-        return {"import": self._read_import()}
+        return {"file": self.capture(self._cfg), "import": self._read_import()}
 
     def apply(self, palette: Palette) -> None:
         # Regenerate the theme file from the palette on every apply so palette
         # changes propagate. Then point alacritty.toml's import at only it.
-        try:
-            _NP_THEME.parent.mkdir(parents=True, exist_ok=True)
-            _NP_THEME.write_text(_renderer.render(palette))
-        except OSError as e:
-            _LOG.warning("nightpanel: alacritty theme write failed: %s", e)
-
-        self._set_import([str(_NP_THEME)])
+        self.write(self._np_theme, _renderer.render(palette))
+        self._set_import([str(self._np_theme)])
 
     def revert(self, snapshot: dict) -> None:
-        prev = snapshot.get("import")
-        # Legacy/unexpected shapes (e.g. a bare string from the old regex
-        # adapter) can't be trusted as an import list — drop the import rather
-        # than write it back malformed; the next apply re-snapshots cleanly.
-        if prev is not None and not (
-            isinstance(prev, list) and all(isinstance(p, str) for p in prev)
-        ):
-            prev = None
-        self._set_import(prev)
+        captured = snapshot.get("file")
+        if not captured:
+            raise AdapterError(f"{self.name}: no capture for {self._cfg}; refusing to revert")
+        self.restore(self._cfg, captured)
 
     def verify(self, expected: Literal["on", "off"]) -> bool:
         imp = self._read_import() or []
@@ -76,32 +78,31 @@ class AlacrittyAdapter(Adapter):
         return [str(x) for x in imp]
 
     def _load(self) -> tomlkit.TOMLDocument | None:
-        if not _CFG.exists():
+        if not self._cfg.exists():
             return None
         try:
-            return tomlkit.parse(_CFG.read_text())
+            return tomlkit.parse(self.read_text(self._cfg))
         except (OSError, TOMLKitError) as e:
-            _LOG.warning("nightpanel: alacritty.toml unreadable: %s", e)
-            return None
+            # A corrupt alacritty.toml is a real problem the user should see,
+            # not a silent no-op: the previous behaviour made apply() write a
+            # brand-new file over an unreadable one, destroying the user's config.
+            raise AdapterError(f"{self.name}: alacritty.toml unreadable: {e}") from e
 
     def _set_import(self, value: list[str] | None) -> None:
         """Set ``[general].import`` to ``value``, or remove it when ``None``."""
-        try:
-            doc = self._load()
-            if doc is None:
-                if value is None:
-                    return
-                doc = tomlkit.document()
-            general = doc.get("general")
-            if general is None:
-                if value is None:
-                    return
-                general = tomlkit.table()
-                doc["general"] = general
+        doc = self._load()
+        if doc is None:
             if value is None:
-                general.pop("import", None)
-            else:
-                general["import"] = value
-            _CFG.write_text(tomlkit.dumps(doc))
-        except (OSError, TOMLKitError) as e:
-            _LOG.warning("nightpanel: alacritty apply failed: %s", e)
+                return
+            doc = tomlkit.document()
+        general = doc.get("general")
+        if general is None:
+            if value is None:
+                return
+            general = tomlkit.table()
+            doc["general"] = general
+        if value is None:
+            general.pop("import", None)
+        else:
+            general["import"] = value
+        self.write(self._cfg, tomlkit.dumps(doc))
