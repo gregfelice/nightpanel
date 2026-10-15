@@ -7,6 +7,8 @@ nightpanel_sources = [
   'nightpanel/application.py',
   'nightpanel/window.py',
   'nightpanel/palette.py',
+  'nightpanel/paths.py',
+  'nightpanel/runner.py',
   'nightpanel/player_app.py',
   'nightpanel/toggle.py',
 ]
