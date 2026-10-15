@@ -51,16 +51,9 @@ class _SwallowingAdapter(Adapter):
 
 
 def test_battery_flags_a_discarded_command_result() -> None:
-    tree = ast.parse(inspect.getsource(_SwallowingAdapter))
-    offenders = [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Expr)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Attribute)
-        and node.value.func.attr == "run"
-    ]
-    assert offenders, "the battery must flag a discarded command result"
+    assert battery._static_violations(inspect.getsource(_SwallowingAdapter))["discarded_run"], (
+        "the battery must flag a discarded command result"
+    )
 
 
 def test_battery_flags_a_revert_on_a_guess(tmp_path: Path) -> None:
@@ -181,6 +174,39 @@ def test_battery_flags_writing_an_undeclared_file(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError):
         battery.test_every_user_file_an_adapter_writes_is_declared_restorable(bad, env)
+
+
+class _DirectWritingAdapter(Adapter):
+    """An adapter that writes through Path.write_text instead of base.write()."""
+
+    name = "direct-writer"
+
+    def restorable_paths(self) -> list[Path]:
+        return [self.paths.home / "state-file"]
+
+    def snapshot(self) -> dict:
+        return {str(self.restorable_paths()[0]): self.capture(self.restorable_paths()[0])}
+
+    def apply(self, palette: Palette) -> None:
+        (self.paths.home / "state-file").write_text("nightpanel applied\n")
+
+    def revert(self, snapshot: dict) -> None:
+        self.restore(self.restorable_paths()[0], snapshot[str(self.restorable_paths()[0])])
+
+    def verify(self, expected: Literal["on", "off"]) -> bool:
+        return True
+
+
+def test_battery_flags_a_write_that_bypasses_base() -> None:
+    """base.write() is where the symlink rule and the failure rule live.
+
+    A write through Path.write_text escapes both, and it is invisible to the
+    runtime check that records what an adapter wrote — so the rule has to be on
+    the source.
+    """
+    assert battery._static_violations(inspect.getsource(_DirectWritingAdapter))["raw_writes"], (
+        "the battery must flag a write that bypasses base.write()"
+    )
 
 
 def test_battery_flags_an_adapter_module_that_is_not_exported(tmp_path: Path) -> None:

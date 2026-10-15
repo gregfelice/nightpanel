@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import os
 import re
 from pathlib import Path
 
@@ -148,7 +149,12 @@ def test_every_discovered_adapter_is_exported_by_the_package(adapter: Adapter) -
 
 
 def test_declared_paths_live_inside_the_injected_paths(adapter: Adapter, env: Env) -> None:
-    for p in adapter.restorable_paths():
+    """Both kinds of declared path, not just the restorable ones.
+
+    Checking only restorable_paths() leaves own_paths() unpoliced: an adapter can
+    declare a hardcoded absolute path as its own and pass.
+    """
+    for p in adapter.restorable_paths() + adapter.own_paths():
         assert str(p).startswith(str(env.root)), (
             f"{adapter.name}: {p} is outside the injected Paths — an import-time "
             "Path.home() or a hardcoded absolute path"
@@ -334,6 +340,12 @@ def test_every_user_file_an_adapter_writes_is_declared_restorable(
         f"{adapter.name}: wrote {undeclared} without declaring them restorable or its own"
     )
 
+    # Rule #6 on the write itself, not on the declaration. A declared path can
+    # still resolve outside the fixture — through expanduser(), os.environ["HOME"],
+    # or a symlink that leaves the root — and the declaration test cannot see that.
+    outside = [str(p) for p in written if not str(p).startswith(str(env.root))]
+    assert not outside, f"{adapter.name}: wrote {outside} outside the injected Paths root"
+
 
 def test_revert_refuses_an_empty_snapshot(adapter: Adapter) -> None:
     """Reverting on a guess is the worst outcome this tool can produce."""
@@ -348,6 +360,10 @@ def test_revert_refuses_an_empty_snapshot(adapter: Adapter) -> None:
 
 
 def test_write_failure_raises_instead_of_logging(adapter: Adapter, env: Env) -> None:
+    if os.geteuid() == 0:
+        # Root is not blocked by mode bits, so the write would succeed and the test
+        # would report a pass for a rule it never checked.
+        pytest.skip("chmod 0o500 does not block writes for root")
     unwritable = env.root / "unwritable"
     unwritable.mkdir()
     unwritable.chmod(0o500)
@@ -427,11 +443,30 @@ def test_restore_refuses_an_incomplete_capture(adapter: Adapter, env: Env) -> No
 
 _HEX = re.compile(r"#[0-9a-fA-F]{6}")
 
+#: Writes that bypass base.write()/restore(). base.write() is where a symlink is
+#: replaced rather than followed and where a failed write becomes an AdapterError
+#: instead of a logged warning; bypassing it escapes both, and it is invisible to
+#: the runtime check that records what an adapter wrote.
+_RAW_WRITE_ATTRS = ("write_text", "write_bytes", "symlink", "copy", "copy2", "copytree")
 
-def test_adapter_module_follows_the_rules(adapter: Adapter) -> None:
-    """The rules that keep this class of bug out, checked on the source itself."""
-    src = Path(inspect.getsourcefile(type(adapter))).read_text()
+
+def _static_violations(src: str) -> dict[str, list]:
+    """The rules that can be checked on the source, without executing it.
+
+    Every list empty means the source follows the contract. The battery asserts
+    emptiness for the real adapters; the self-check asserts non-emptiness for a
+    deliberately bad one, which is what makes each of these a rule rather than a
+    preference.
+    """
     tree = ast.parse(src)
+
+    def not_on_self(node: ast.Call) -> bool:
+        return not (isinstance(node.func.value, ast.Name) and node.func.value.id == "self")
+
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    calls = [
+        n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    ]
 
     imports = set()
     for node in ast.walk(tree):
@@ -440,67 +475,43 @@ def test_adapter_module_follows_the_rules(adapter: Adapter) -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.add(node.module.split(".")[0])
 
-    assert "subprocess" not in imports, (
-        f"{adapter.name}: must shell out through the injected Runner"
-    )
-    assert "logging" not in imports, (
-        f"{adapter.name}: base.py owns logging; adapters raise AdapterError"
-    )
-
-    assert "Path.home()" not in src, (
-        f"{adapter.name}: import-time Path.home() — resolve through the injected Paths"
-    )
     # Docstrings are excluded: a comment explaining a past hardcoded hex is not a
     # hardcoded hex. Only strings the code can act on count.
     literals = {
         n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
     } - {ast.get_docstring(tree)}
 
-    hex_hits = sorted(s for s in literals if _HEX.search(s))
-    assert not hex_hits, f"{adapter.name}: hardcoded hex; the Palette is the source of truth"
+    return {
+        "subprocess": ["subprocess"] if "subprocess" in imports else [],
+        "logging": ["logging"] if "logging" in imports else [],
+        "home": ["Path.home()"] if "Path.home()" in src else [],
+        "hex": sorted(s for s in literals if _HEX.search(s)),
+        # A string that *looks like a filesystem location*, not a comment marker
+        # that happens to start with a slash.
+        "absolute": sorted(
+            s
+            for s in literals
+            if re.fullmatch(r"(/[A-Za-z0-9._-]+)+", s) and s not in {"/proc", "/sys"}
+        ),
+        # Rule #1: a command result thrown away anywhere in the adapter is a
+        # failure recorded as a success. Helpers count — a helper that discards is
+        # the same lie as apply() discarding.
+        "discarded_run": [
+            n.lineno for n in calls if isinstance(parents.get(n), ast.Expr) and n.func.attr == "run"
+        ],
+        # Rule #3 on the source: read through base's helpers, which raise
+        # AdapterError, or through capture(), which records what must be put back.
+        # Path.read_text() raises UnicodeDecodeError — a ValueError that escapes
+        # except OSError and aborts the toggle for every other tool.
+        "raw_reads": [n.lineno for n in calls if n.func.attr == "read_text" and not_on_self(n)],
+        "raw_writes": [
+            n.lineno for n in calls if n.func.attr in _RAW_WRITE_ATTRS and not_on_self(n)
+        ],
+    }
 
-    # A string that *looks like a filesystem location*, not a comment marker that
-    # happens to start with a slash.
-    absolute = sorted(
-        s
-        for s in literals
-        if re.fullmatch(r"(/[A-Za-z0-9._-]+)+", s) and s not in {"/proc", "/sys"}
-    )
-    assert not absolute, (
-        f"{adapter.name}: absolute path literal {absolute} bypasses the injected Paths"
-    )
 
-    # Rule #1, checked on the source: a command result thrown away anywhere in the
-    # adapter is a failure recorded as a success. A mutation must be either
-    # run_checked (must land) or run_optional with a stated reason (the tool is not
-    # running). Helpers count: a helper that discards is the same lie as apply()
-    # discarding.
-    offenders = [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Expr)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Attribute)
-        and node.value.func.attr == "run"
-    ]
-    assert not offenders, (
-        f"{adapter.name}: self.run() result thrown away at line(s) {offenders}. "
-        "Use run_checked(), or run_optional(cmd, why) if no session is normal."
-    )
-
-    # Rule #3 on the source: a file is read through base's helpers, which raise
-    # AdapterError, or through capture(), which records what must be put back.
-    # Path.read_text() raises UnicodeDecodeError — a ValueError that escapes
-    # except OSError and aborts the toggle for every other tool.
-    raw_reads = [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "read_text"
-        and not (isinstance(node.func.value, ast.Name) and node.func.value.id == "self")
-    ]
-    assert not raw_reads, (
-        f"{adapter.name}: Path.read_text() at line(s) {raw_reads}; "
-        "use self.read_text() or capture() so an unreadable file is an AdapterError, not a crash."
-    )
+def test_adapter_module_follows_the_rules(adapter: Adapter) -> None:
+    """The rules that keep this class of bug out, checked on the source itself."""
+    found = _static_violations(Path(inspect.getsourcefile(type(adapter))).read_text())
+    for rule, offenders in found.items():
+        assert not offenders, f"{adapter.name}: {rule} violation {offenders}"
