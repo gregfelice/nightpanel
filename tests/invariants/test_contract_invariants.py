@@ -604,7 +604,7 @@ def test_verify_tracks_the_palette(adapter: Adapter, env: Env) -> None:
     """The half of rule #7 that can actually bite — and it bites on one adapter.
 
     Only a verify() that reads the palette can tell that a *different* palette was
-    applied. The other nine verify on a sentinel, a theme name, or an import line, so
+    applied. The other eight verify on a sentinel, a theme name, or an import line, so
     they answer "on" for every palette. That is a legitimate answer for them, but it
     means this rule cannot check them, and a rule that checks nothing is a preference.
 
