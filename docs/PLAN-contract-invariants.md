@@ -25,8 +25,12 @@ next commit, which is how finding 6 happened.
 The 8 skips are the palette rule, which is scoped to the adapters that can answer it (tmux
 alone); each skip names the adapter and the reason.
 
-The earlier baseline (52 errors, 373 vs 389 passed, 138 tests) has no surviving source, so it
-cannot be reconciled. It is not repeated here. The numbers above are the baseline going forward.
+The earlier baseline survives — untracked, at the root of the main checkout, never committed. It
+contradicts itself: the same run is recorded as 389 passed / 5 failed / 52 errors and as 373
+passed / 5 failed / 61 errors, and the same suite as 138 tests, 186 passed, and 443 passed with 12
+failures against 651 clean. It is not repeated here. The numbers above are the baseline going
+forward; the surviving file is either committed as an appendix or deleted, and finding 6 stays open
+until one of those happens.
 
 ## Findings
 
@@ -37,10 +41,14 @@ cannot be reconciled. It is not repeated here. The numbers above are the baselin
 | 3 | Discovery walked the package namespace, so an unimported adapter module was invisible to the rule meant to catch it | Fixed, `5207a28` — walks `nightpanel/adapters/*.py`, requires export |
 | 4 | Rule 6 checked declared paths, not written paths | Fixed, `643ca8f` — covers `own_paths()` and the write itself |
 | 5 | Orchestrator not held to the rule it enforces on adapters | Fixed, `bb7c9cf` — `_save_state` raises, `_load_state` separates corrupt from absent |
-| 6 | Number drift in the plan | Open — the plan file is gone, so the drift cannot be reconciled; the PR description uses today's measurements only |
+| 6 | Number drift in the plan | Open — the original plan survives untracked at the repo root, and its numbers disagree with each other; the PR description uses today's measurements only |
 | 7 | `own_paths()` permitted overwriting a pre-existing user file with no capture | Fixed, `5f1902e` — capture-or-refuse, proven against the four real adapters |
 | 8 | `chmod 0o500` test passes silently as root | Fixed, `643ca8f` — skip when `os.geteuid() == 0` |
 | — | The orchestrator's own rule was not applied at the entry point: `toggle.py` discarded the result | Fixed, `359a110` — the failure is recorded as a decision and exits non-zero |
+
+The rule numbers in findings 4 and 5 are the original plan's. ADR-001 names the rules without
+numbering them, and the test comments carry the same numbers; if the surviving file is deleted, the
+test comments should name the rules as ADR-001 names them.
 
 Two findings the stateful runner produced that the review did not predict:
 
@@ -65,16 +73,17 @@ session — which is what happened to the plan this page replaces.
 > deliberately bad adapter. Full suite 687 passed, 8 skipped. The 8 skips are the palette rule,
 > scoped to the adapters that can answer it (tmux alone); each names its adapter and the reason.
 >
-> Findings 1–5, 7 and 8 are fixed. Finding 6 is unreconcilable: the plan it referred to was a
-> session transcript, not a file, so its baseline numbers have no surviving source. Every figure
-> here is measured, on 2026-10-14.
+> Findings 1–5, 7 and 8 are fixed. Finding 6 is open: the original plan survives untracked at the
+> repo root, and its numbers contradict each other. Every figure here is measured, on 2026-10-14.
 >
 > Not run here: `bin/validate`, which runs in CI's proof job. `ruff check` and
 > `ruff format --check` are clean on the branch.
 
 ## Remaining work
 
-1. Push the branch and open the pull request against `master` with the description above.
+1. Push the branch and open the pull request against `main` — nightpanel has no `master` on either
+   remote (`origin`: `main`, `deb-packaging`; `github/HEAD` → `main`). With the description above,
+   plus the gate's verdict on the commit, which §2 requires and has not been recorded yet.
 2. Rendering adapter and orchestrator failures in the UI — tracked in `docs/BACKLOG.md`. The
    entry point side is settled: `toggle.py` records a refused state write as a decision and
    exits non-zero, because `bin/analyze-toggle-log` only counts invocations that produced a
