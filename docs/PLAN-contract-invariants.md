@@ -76,12 +76,14 @@ session — which is what happened to the plan this page replaces.
 > passed, and the installed package failed at `from ..paths import Paths`.
 >
 > Battery: 208 passed + 8 skipped, plus 10 self-checks that prove each rule bites on a
-> deliberately bad adapter. Full suite 687 passed, 8 skipped. The 8 skips are the palette rule,
+> deliberately bad adapter, plus the install-list guard in `tests/unit/`. Full suite 690 passed,
+> 8 skipped. The 8 skips are the palette rule,
 > scoped to the adapters that can answer it (tmux alone); each names its adapter and the reason.
 >
-> Findings 1–5, 7, 8 and 9 are fixed. Finding 6 is open: the original plan survives untracked at
-> the repo root, and its numbers contradict each other. Every figure here is measured, on
-> 2026-10-14.
+> Findings 1–5, 7, 8 and 9 are fixed. Findings 6, 10 and 11 are open: the original plan survives
+> untracked at the repo root and contradicts itself; the import-time `Path.home()` rule is scoped
+> to `nightpanel/adapters/`, so three module-level constants outside it are not policed; P5's
+> coverage report was never produced. Every figure here is measured, on 2026-10-14.
 >
 > `bin/validate` passed on `afc894f`: 11 checks, 0 failures, including the clean-trixie build and
 > the installed-package smoke. `ruff check` and `ruff format --check` are clean on the branch. The
