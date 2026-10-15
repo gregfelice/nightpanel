@@ -117,3 +117,64 @@ def test_battery_flags_writing_a_binary_capture_as_text(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError):
         battery.test_a_non_utf8_file_comes_back_byte_for_byte(bad, env)
+
+
+class _LinkFollowingAdapter(Adapter):
+    """An adapter that writes through a symlink instead of replacing it."""
+
+    name = "link-follower"
+
+    def write(self, path: Path, content: str) -> None:
+        path.resolve().write_text(content)  # follows the link to the file behind it
+
+    def restorable_paths(self) -> list[Path]:
+        return [self.paths.home / "link"]
+
+    def snapshot(self) -> dict:
+        return {str(self.restorable_paths()[0]): self.capture(self.restorable_paths()[0])}
+
+    def apply(self, palette: Palette) -> None:
+        self.write(self.restorable_paths()[0], "nightpanel applied\n")
+
+    def revert(self, snapshot: dict) -> None:
+        self.restore(self.restorable_paths()[0], snapshot[str(self.restorable_paths()[0])])
+
+    def verify(self, expected: Literal["on", "off"]) -> bool:
+        return True
+
+
+def test_battery_flags_writing_through_a_symlink(tmp_path: Path) -> None:
+    env = Env(root=tmp_path, paths=Paths(home=tmp_path), runner=RecordingRunner())
+    bad = _LinkFollowingAdapter(paths=env.paths, runner=env.runner)
+
+    with pytest.raises(AssertionError):
+        battery.test_write_does_not_write_through_a_symlink(bad, env)
+
+
+class _UndeclaredWriterAdapter(Adapter):
+    """An adapter that writes a user file it never declares."""
+
+    name = "undeclared-writer"
+
+    def restorable_paths(self) -> list[Path]:
+        return []  # claims nothing to put back, then writes a file anyway
+
+    def snapshot(self) -> dict:
+        return {}
+
+    def apply(self, palette: Palette) -> None:
+        self.write(self.paths.home / "the-users-file", "nightpanel applied\n")
+
+    def revert(self, snapshot: dict) -> None:
+        pass
+
+    def verify(self, expected: Literal["on", "off"]) -> bool:
+        return True
+
+
+def test_battery_flags_writing_an_undeclared_file(tmp_path: Path) -> None:
+    env = Env(root=tmp_path, paths=Paths(home=tmp_path), runner=RecordingRunner())
+    bad = _UndeclaredWriterAdapter(paths=env.paths, runner=env.runner)
+
+    with pytest.raises(AssertionError):
+        battery.test_every_user_file_an_adapter_writes_is_declared_restorable(bad, env)

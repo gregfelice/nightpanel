@@ -29,12 +29,13 @@ from nightpanel.runner import RecordingRunner
 
 @pytest.fixture
 def env(paths: Paths, runner: RecordingRunner):
-    return SimpleNamespace(
-        paths=paths,
-        runner=runner,
-        settings=paths.home / ".gemini" / "settings.json",
-        wrapper=paths.bin / "gemini",
-    )
+    """The fixture root is not pre-created, so the directories the tests write into
+    are made here — the same as the invariants seeders do."""
+    settings = paths.home / ".gemini" / "settings.json"
+    wrapper = paths.bin / "gemini"
+    for path in (settings, wrapper):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    return SimpleNamespace(paths=paths, runner=runner, settings=settings, wrapper=wrapper)
 
 
 def test_apply_writes_custom_theme(env):
@@ -72,7 +73,6 @@ def test_apply_writes_custom_theme(env):
 
 def test_apply_preserves_other_custom_themes(env):
     """User-defined customThemes (other than 'nightpanel') survive apply."""
-    env.settings.parent.mkdir(parents=True, exist_ok=True)
     env.settings.write_text(
         json.dumps(
             {
@@ -96,7 +96,6 @@ def test_apply_preserves_other_custom_themes(env):
 def test_revert_restores_previous_theme(env):
     adapter = GeminiCliAdapter(paths=env.paths, runner=env.runner)
 
-    env.settings.parent.mkdir(parents=True, exist_ok=True)
     env.settings.write_text(json.dumps({"ui": {"theme": "Dracula"}}))
     snapshot = adapter.snapshot()
 
@@ -113,7 +112,6 @@ def test_snapshot_ignores_own_applied_value(env):
     after the customTheme block is gone."""
     adapter = GeminiCliAdapter(paths=env.paths, runner=env.runner)
 
-    env.settings.parent.mkdir(parents=True, exist_ok=True)
     env.settings.write_text(json.dumps({"ui": {"theme": "nightpanel"}}))
     snapshot = adapter.snapshot()
     assert snapshot["theme"] is None
@@ -128,7 +126,6 @@ def test_verify_tracks_theme_and_wrapper(env):
 
     # Pre-write the bare marker; full content equality check will fail
     # until apply() rewrites it with the real wrapper script.
-    env.wrapper.parent.mkdir(parents=True, exist_ok=True)
     env.wrapper.write_text(_WRAPPER_MARKER)
 
     assert adapter.verify("on") is False

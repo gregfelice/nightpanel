@@ -173,10 +173,3 @@ def adapter(env: Env, request) -> Adapter:
     env.seed(a)
     (LIVE_FIXTURES.get(cls.name) or (lambda e: None))(env)
     return a
-
-
-@pytest.fixture
-def fresh(env: Env, request) -> Adapter:
-    """The same adapter, but with nothing seeded — the "user had no file" case."""
-    cls = request.param
-    return cls(paths=env.paths, runner=env.runner, palette=env.palette)

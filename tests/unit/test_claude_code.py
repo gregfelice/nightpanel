@@ -229,12 +229,6 @@ def test_revert_restores_the_installer_symlink_as_a_link(env) -> None:
     assert env.wrapper.readlink() == target
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="genuine source defect: write() follows the installer's symlink, so apply() "
-    "writes the wrapper through the link and overwrites the real binary instead of "
-    "replacing the link; revert then restores a link to content it destroyed",
-)
 def test_apply_replaces_the_link_instead_of_writing_through_it(env) -> None:
     target = env.versions / "2.1.152"
     original = "#!/bin/sh\nreal binary\n"

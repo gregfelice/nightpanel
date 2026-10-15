@@ -32,12 +32,13 @@ _DEFAULT_CS = "tokyonight"
 
 @pytest.fixture
 def env(paths: Paths, runner: RecordingRunner):
-    return SimpleNamespace(
-        paths=paths,
-        runner=runner,
-        after=paths.config / "nvim" / "after" / "plugin" / "nightpanel_active.lua",
-        sock=paths.runtime / "nvim.4242.0",
-    )
+    """The fixture root is not pre-created, so the directories the tests write into
+    are made here — the same as the invariants seeders do."""
+    after = paths.config / "nvim" / "after" / "plugin" / "nightpanel_active.lua"
+    sock = paths.runtime / "nvim.4242.0"
+    for path in (after, sock):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    return SimpleNamespace(paths=paths, runner=runner, after=after, sock=sock)
 
 
 def _make_live(env, colorscheme: str) -> None:

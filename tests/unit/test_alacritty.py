@@ -45,12 +45,13 @@ size = 12.0
 
 @pytest.fixture
 def env(paths: Paths, runner: RecordingRunner):
-    return SimpleNamespace(
-        paths=paths,
-        runner=runner,
-        cfg=paths.config / "alacritty" / "alacritty.toml",
-        theme=paths.config / "alacritty" / "themes" / "themes" / "nightpanel.toml",
-    )
+    """The fixture root is not pre-created, so the directories the tests write into
+    are made here — the same as the invariants seeders do."""
+    cfg = paths.config / "alacritty" / "alacritty.toml"
+    theme = paths.config / "alacritty" / "themes" / "themes" / "nightpanel.toml"
+    for path in (cfg, theme):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    return SimpleNamespace(paths=paths, runner=runner, cfg=cfg, theme=theme)
 
 
 def _parses(path):

@@ -71,9 +71,13 @@ def test_find_profile_absolute_path_respected(tmp_path):
 
 @pytest.fixture
 def env(paths: Paths, runner: RecordingRunner):
+    """The fixture root is not pre-created, so the directories the tests write into
+    are made here — the same as the invariants seeders do."""
     ff_root = paths.home / ".mozilla" / "firefox"
     profile = ff_root / "abc.default"
-    profile.mkdir(parents=True)
+    profile.mkdir(parents=True, exist_ok=True)
+    command_file = paths.nightpanel / "np-command.json"
+    command_file.parent.mkdir(parents=True, exist_ok=True)
     _write_ini(ff_root, "[Profile0]\nPath=abc.default\nDefault=1\n")
 
     # Brightness is read through the Runner, so the answers pin it here.
@@ -86,7 +90,7 @@ def env(paths: Paths, runner: RecordingRunner):
     return SimpleNamespace(
         paths=paths,
         runner=runner,
-        command_file=paths.nightpanel / "np-command.json",
+        command_file=command_file,
         ff_root=ff_root,
         profile=profile,
     )
@@ -129,7 +133,6 @@ def test_verify_tracks_command_action(env):
 
 
 def test_verify_off_on_corrupt_command_file(env):
-    env.command_file.parent.mkdir(parents=True, exist_ok=True)
     env.command_file.write_text("{not valid json")
     assert FirefoxAdapter(paths=env.paths, runner=env.runner).verify("off") is True
 

@@ -221,6 +221,97 @@ def test_a_non_utf8_file_comes_back_byte_for_byte(adapter: Adapter, env: Env) ->
     )
 
 
+def test_write_does_not_write_through_a_symlink(adapter: Adapter, env: Env) -> None:
+    """A path that is a symlink is replaced, not written through.
+
+    `capture()` records a link as a link with no content, so a write through it mutates
+    a file the capture cannot put back. That is how claude_code's wrapper landed on the
+    real binary under `versions/`: the promise that revert restores what capture
+    recorded only holds if the write stays at the recorded location.
+    """
+    target = env.root / "the-users-real-file"
+    target.write_text("the user's real file\n")
+    link = env.root / "link"
+    link.symlink_to(target)
+
+    adapter.write(link, "nightpanel applied\n")
+
+    assert target.read_text() == "the user's real file\n", (
+        f"{adapter.name}: write() followed the link and mutated the file behind it"
+    )
+    assert not link.is_symlink(), f"{adapter.name}: write() left the link in place"
+
+
+def test_read_text_does_not_turn_absence_into_a_failure(adapter: Adapter, env: Env) -> None:
+    """A missing file is empty state, not a read failure.
+
+    Every adapter treats absence as "nothing there yet" and creates the file. A
+    `FileNotFoundError` converted into `AdapterError` makes a fresh profile raise, and a
+    raw `FileNotFoundError` escaping an adapter aborts the toggle for every other tool.
+    """
+    missing = env.root / "not-there-yet"
+    try:
+        adapter.read_text(missing)
+    except FileNotFoundError:
+        return
+    except AdapterError as e:
+        raise AssertionError(
+            f"{adapter.name}: read_text() reported absence as a failure: {e}"
+        ) from None
+    raise AssertionError(f"{adapter.name}: read_text() returned content for a missing file")
+
+
+def test_a_fresh_profile_is_created_or_refused(adapter: Adapter, tmp_path: Path) -> None:
+    """The user with no file yet is a normal case, not a crash.
+
+    Either apply() creates the file or it refuses with `AdapterError` / `AdapterNotLive`.
+    A raw exception escaping the adapter is the failure shape this rule exists to catch:
+    it aborts the toggle for every other tool. Run on an unseeded fixture, because the
+    seeded one is the "user already had a file" case.
+    """
+    fresh = type(adapter)(
+        paths=Paths(home=tmp_path / "fresh"), runner=adapter.runner, palette=adapter.palette
+    )
+    paths = fresh.restorable_paths()
+    if not paths:
+        return  # acts on a live session, or has no user file to create
+    try:
+        fresh.apply(BATTERY_PALETTE)
+    except (AdapterError, AdapterNotLive):
+        return
+    assert any(p.exists() for p in paths), (
+        f"{fresh.name}: apply() on a fresh profile wrote nothing and did not refuse"
+    )
+
+
+def test_every_user_file_an_adapter_writes_is_declared_restorable(adapter: Adapter, env: Env) -> None:
+    """Rule #3 checked on the write itself.
+
+    Every file an adapter writes must be either a user file it commits to put back
+    (`restorable_paths()`) or a file it declares as its own (`own_paths()`). A file that
+    is neither is a user file written without a capture that could put it back — the
+    claim has to be in the contract, not in a comment.
+    """
+    written: list[Path] = []
+    original = adapter.write
+
+    def recording(path: Path, content: str) -> None:
+        written.append(path)
+        original(path, content)
+
+    adapter.write = recording
+    try:
+        adapter.apply(BATTERY_PALETTE)
+    except (AdapterError, AdapterNotLive):
+        pass  # refusing is an honest outcome
+
+    declared = {str(p) for p in adapter.restorable_paths()} | {str(p) for p in adapter.own_paths()}
+    undeclared = [str(p) for p in written if str(p) not in declared]
+    assert not undeclared, (
+        f"{adapter.name}: wrote {undeclared} without declaring them restorable or its own"
+    )
+
+
 def test_revert_refuses_an_empty_snapshot(adapter: Adapter) -> None:
     """Reverting on a guess is the worst outcome this tool can produce."""
     if not adapter.stateful:

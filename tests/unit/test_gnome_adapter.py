@@ -42,12 +42,14 @@ def palette():
 
 @pytest.fixture
 def env(paths: Paths, runner: RecordingRunner):
-    return SimpleNamespace(
-        paths=paths,
-        runner=runner,
-        gtk4=paths.config / "gtk-4.0" / "gtk.css",
-        gtk3=paths.config / "gtk-3.0" / "gtk.css",
-    )
+    """The fixture root is not pre-created, so the directories the tests write into
+    are made here — the same as the invariants seeders do."""
+    gtk4 = paths.config / "gtk-4.0" / "gtk.css"
+    gtk3 = paths.config / "gtk-3.0" / "gtk.css"
+    for path in (gtk4, gtk3):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    paths.nightpanel.mkdir(parents=True, exist_ok=True)
+    return SimpleNamespace(paths=paths, runner=runner, gtk4=gtk4, gtk3=gtk3)
 
 
 def _sets(runner: RecordingRunner) -> set[tuple[str, str, str]]:
@@ -96,8 +98,6 @@ def test_revert_restores_wallpaper_and_css_from_snapshot(env):
     wallpaper in the snapshot; revert must put it back — and put the CSS files
     back byte-for-byte, which the old version never did."""
     user_css = "user css — nightpanel must put this back\n"
-    env.gtk4.parent.mkdir(parents=True, exist_ok=True)
-    env.gtk3.parent.mkdir(parents=True, exist_ok=True)
     env.gtk4.write_text(user_css)
     env.gtk3.write_text(user_css)
     env.runner.prefix[("gsettings", "get")] = "'user-value'"
@@ -141,7 +141,6 @@ def test_verify_keys_off_color_scheme_and_sentinel(env):
     adapter = GnomeAdapter(paths=env.paths, runner=env.runner, palette=NIGHTPANEL)
     assert adapter.verify("on") is False  # dark scheme, but no CSS yet
 
-    env.gtk4.parent.mkdir(parents=True, exist_ok=True)
     env.gtk4.write_text(f"{START_SENTINEL}\nx\n")
     assert adapter.verify("on") is True
     assert adapter.verify("off") is False
