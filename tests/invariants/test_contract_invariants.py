@@ -362,7 +362,11 @@ def test_a_declared_own_path_that_already_exists_is_captured_or_refused(
 
     The rule is checked on the round trip, not on the source: seed user content at
     every declared own path, apply, revert, and the content has to be back. An
-    adapter that cannot capture it has to refuse, and refusing is an honest outcome.
+    adapter that cannot capture it has to refuse — but the refusal is honest only
+    when it happens before the write, because a refusal at revert() arrives after
+    apply() has already overwritten the file. The content check therefore runs on
+    the refused path too: a refusal that stopped before the write leaves the user's
+    content standing, and a refusal that arrived after it does not.
     """
     own = adapter.own_paths()
     if not own:
@@ -378,7 +382,10 @@ def test_a_declared_own_path_that_already_exists_is_captured_or_refused(
         adapter.apply(BATTERY_PALETTE)
         adapter.revert(snap)
     except (AdapterError, AdapterNotLive):
-        return  # refusing is an honest outcome
+        # Refusing is an honest outcome only when it happens before the write. The
+        # content check below is what tells the two refusals apart, so it runs on the
+        # refused path as well.
+        pass
 
     for key, content in before.items():
         p = Path(key)
@@ -391,7 +398,9 @@ def test_a_declared_own_path_that_already_exists_is_captured_or_refused(
         )
         assert p.read_bytes() == content, (
             f"{adapter.name}: {p} was declared as its own, but a file already there is "
-            "user state — snapshot() did not capture it and revert() did not put it back"
+            "user state — snapshot() did not capture it, and nothing put it back; a "
+            "refusal at revert() is the same damage when apply() has already written "
+            "over the file"
         )
 
 

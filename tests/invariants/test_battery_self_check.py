@@ -20,6 +20,7 @@ from typing import Literal
 import pytest
 
 from nightpanel.adapters import Adapter
+from nightpanel.adapters.base import AdapterError
 from nightpanel.palette import NIGHTPANEL, Palette
 from nightpanel.paths import Paths
 from nightpanel.runner import RecordingRunner
@@ -215,6 +216,47 @@ def test_battery_flags_an_own_path_that_is_user_state(tmp_path: Path) -> None:
     # own. The rule that bites is the round trip.
     battery.test_every_user_file_an_adapter_writes_is_declared_restorable(bad, env)
 
+    with pytest.raises(AssertionError):
+        battery.test_a_declared_own_path_that_already_exists_is_captured_or_refused(bad, env)
+
+
+class _OwnPathRefusedAfterWriteAdapter(Adapter):
+    """An adapter that overwrites a user file at its declared own path, then refuses.
+
+    The refusal is the honest answer to "I have nothing to put back" — but it arrives
+    at `revert()`, after `apply()` already destroyed the file. A refusal is honest
+    only when it happens before the write, so the round trip has to check the content
+    on the refused path too. This is the shape the rule accepted as honest while the
+    test returned early on any refusal.
+    """
+
+    #: No restorable path, so nothing can be put back. The reason is the shape itself.
+    stateful = False
+
+    name = "own-path-refused-after-write"
+
+    def own_paths(self) -> list[Path]:
+        return [self.paths.home / "ours"]
+
+    def snapshot(self) -> dict:
+        return {}  # declares the path as its own and never captures it
+
+    def apply(self, palette: Palette) -> None:
+        self.write(self.own_paths()[0], "nightpanel applied\n")
+
+    def revert(self, snapshot: dict) -> None:
+        raise AdapterError("no capture; refusing to revert on a guess")
+
+    def verify(self, expected: Literal["on", "off"]) -> bool:
+        return True
+
+
+def test_battery_flags_a_refusal_that_arrives_after_the_write(tmp_path: Path) -> None:
+    env = Env(root=tmp_path, paths=Paths(home=tmp_path), runner=RecordingRunner())
+    bad = _OwnPathRefusedAfterWriteAdapter(paths=env.paths, runner=env.runner)
+
+    # The declaration is honest-looking and the refusal reads as honest on its own;
+    # only the round trip shows the user's file was destroyed before the refusal.
     with pytest.raises(AssertionError):
         battery.test_a_declared_own_path_that_already_exists_is_captured_or_refused(bad, env)
 
