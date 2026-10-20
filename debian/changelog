@@ -1,3 +1,24 @@
+nightpanel (0.3.0-1) unstable; urgency=low
+
+  * Adapter contract enforced at runtime (ADR-001). A failed command or an
+    unwritable file raises instead of being logged and recorded as success;
+    revert restores what was captured and refuses to guess; every file an
+    adapter writes is declared, captured, and stays at its recorded path.
+    A battery in tests/invariants/ applies these rules to every adapter,
+    including ones added later.
+  * toggle: a refused state write is recorded as a decision and exits
+    non-zero, so bin/analyze-toggle-log sees the failure.
+  * ui: fall back to Adwaita when the icon theme has no symbolic icons
+    (hicolor rendered every panel icon blank).
+  * paths: no module binds Path.home() at import; the player, the KDE
+    backend and the Firefox host honour XDG_CONFIG_HOME and NP_CONFIG_DIR.
+  * packaging: paths.py and runner.py are installed; they were missing from
+    the install list and the .deb failed on import.
+  * upgrade: tmux's snapshot shape changed. State written by an older
+    version makes the first revert refuse (rule: no revert on a guess).
+
+ -- Greg Felice <gregfelice@gmail.com>  Tue, 20 Oct 2026 17:51:06 -0400
+
 nightpanel (0.2.9-1) unstable; urgency=low
 
   * No functional change. The packaged payload is byte-identical to 0.2.8-1:

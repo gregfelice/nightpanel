@@ -59,6 +59,20 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.0" date="2026-10-20">
+      <description>
+        <p>Nightpanel now reports a failed toggle instead of recording it as
+        a success. Every theming adapter is held to the same rules by a test
+        suite that checks them automatically: a failed command or an
+        unwritable file stops the toggle, and turning the theme off restores
+        exactly what was there before rather than a guess.</p>
+        <p>The panel icons no longer disappear when the system icon theme is
+        set to hicolor; Nightpanel falls back to Adwaita for its own windows.</p>
+        <p>Upgrade note: if the theme was turned on by an earlier version,
+        turn it off once with that version before upgrading, or the first
+        revert after upgrading will refuse and ask for a fresh toggle.</p>
+      </description>
+    </release>
     <release version="0.2.9" date="2026-09-05">
       <description>
         <p>Packaging only, with no change to the application itself. The
