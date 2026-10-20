@@ -7,10 +7,12 @@ import glob
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from gi.repository import Gio, GLib
 
 from nightpanel.models import KeyBinding, Shortcut, ShortcutCategory
+from nightpanel.paths import Paths
 from nightpanel.services.backends.base import ShortcutsBackend
 
 # Known GSettings schemas containing shortcuts
@@ -957,8 +959,12 @@ class GnomeShortcutsBackend(ShortcutsBackend):
             "terminal": ["terminal", "kitty", "alacritty", "foot", "kgx", "term"],
             "browser": ["browser", "firefox", "chrome", "chromium", "brave", "vivaldi", "web"],
             "file_manager": ["files", "nautilus", "nemo", "thunar", "dolphin", "pcmanfm"],
-            "music": ["music", "player", "spotify", "tidal", "rhythmbox"],
-            "cheat_sheet": ["cheat", "nightpanel"],
+            # Keywords must not overlap between nightpanel's own entries. "nightpanel" and
+            # "player" used to match each other's commands, so the cheat-sheet step rewrote
+            # the mini-player's entry and Super+P was lost.
+            "music": ["music", "spotify", "tidal", "rhythmbox"],
+            "player": ["--player", "nightpanel-player", "nightpanel player", "launch player"],
+            "cheat_sheet": ["cheat"],
             "screenshot_full_file": ["screenshot to file"],
             "screenshot_full_clipboard": ["screenshot to clipboard"],
             "screenshot_area_file": ["screenshot area to file"],
@@ -1092,8 +1098,6 @@ class GnomeShortcutsBackend(ShortcutsBackend):
         if shutil.which("nightpanel"):
             return "nightpanel --player"
 
-        from pathlib import Path
-
         curr = Path.cwd()
         for _ in range(3):
             dev_script = curr / "run-dev.sh"
@@ -1172,8 +1176,6 @@ class GnomeShortcutsBackend(ShortcutsBackend):
             return "nightpanel --cheat-sheet"
 
         # Check for development environment
-        from pathlib import Path
-
         # Search upwards for run-dev.sh
         curr = Path.cwd()
         for _ in range(3):
@@ -1183,6 +1185,45 @@ class GnomeShortcutsBackend(ShortcutsBackend):
             curr = curr.parent
 
         return None
+
+    PLAYER_BINDING = "<Super>p"
+
+    @staticmethod
+    def _player_seed_marker() -> Path:
+        return Paths.detect().nightpanel / "player-shortcut-seeded"
+
+    def ensure_player_shortcut(self) -> str:
+        """Bind Super+P to nightpanel's mini-player, once.
+
+        Idempotent and safe to run at every login. It adds the binding only when
+        nightpanel has never seeded it, nobody has a player entry, and Super+P is
+        free. A user who deletes the entry is not given it back: the marker file
+        records that the default was already offered.
+        """
+        marker = self._player_seed_marker()
+        found = self.find_custom_keybinding_by_type("player")
+        if found:
+            # Matched by name too, so an entry whose command was overwritten (the
+            # cheat-sheet step used to do that) still counts as the player and is repaired.
+            if any(k in found["command"] for k in ("--player", "nightpanel-player")):
+                return "present"
+            command = self.detect_np_player()
+            if command and self.update_custom_keybinding(found["path"], command=command):
+                return f"repaired: {found['command']!r} -> {command!r}"
+            return "present"
+        if marker.exists():
+            return "skipped: seeded before and since removed"
+        command = self.detect_np_player()
+        if not command:
+            return "skipped: nightpanel player not found"
+        for existing in self.get_custom_keybindings():
+            if existing["binding"] == self.PLAYER_BINDING:
+                return f"skipped: Super+P is already {existing['name']!r}"
+        if not self.add_custom_keybinding("Launch Player", command, self.PLAYER_BINDING):
+            return "failed: could not write the keybinding"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return f"added: {command}"
 
     def setup_default_custom_shortcuts(self) -> dict[str, str]:
         """Set up default custom shortcuts for common applications.
@@ -1240,7 +1281,9 @@ class GnomeShortcutsBackend(ShortcutsBackend):
         # (Spotify/rhythmbox/…) where the NP player isn't installed.
         music = self.detect_np_player() or self.detect_music_player()
         if music:
-            existing = self.find_custom_keybinding_by_type("music")
+            existing = self.find_custom_keybinding_by_type(
+                "player"
+            ) or self.find_custom_keybinding_by_type("music")
             if existing:
                 self.update_custom_keybinding(existing["path"], command=music, binding="<Super>p")
                 results["music"] = f"Updated: {music}"

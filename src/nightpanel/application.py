@@ -115,6 +115,13 @@ def main(version: str | None = None) -> int:
     # run-dev.sh — so this single intercept makes Super+P work everywhere,
     # mirroring how --cheat-sheet is handled in the window. Pass only the program
     # name: PlayerApp doesn't parse --player and would reject the unknown option.
+    # --seed-shortcuts binds Super+P to the player once and exits. The autostart entry
+    # runs it at login, so the shortcut exists without opening the window.
+    if "--seed-shortcuts" in sys.argv:
+        from nightpanel.services.backends.gnome import GnomeShortcutsBackend
+
+        print(GnomeShortcutsBackend().ensure_player_shortcut())
+        return 0
     if "--player" in sys.argv:
         from nightpanel.player_app import PlayerApp
 

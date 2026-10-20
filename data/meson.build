@@ -37,4 +37,9 @@ if compile_schemas.found()
     args: ['--strict', '--dry-run', meson.current_source_dir()])
 endif
 
+# Binds Super+P to the mini-player once per user, at login. See ensure_player_shortcut().
+install_data('nightpanel-shortcuts.desktop',
+  install_dir: get_option('sysconfdir') / 'xdg' / 'autostart'
+)
+
 subdir('icons')

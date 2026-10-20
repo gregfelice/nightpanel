@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nightpanel shortcuts
+Comment=Bind Super+P to the Nightpanel mini-player the first time it runs
+Exec=nightpanel --seed-shortcuts
+Icon=io.github.gregfelice.Nightpanel
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-Phase=Application
