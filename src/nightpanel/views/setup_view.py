@@ -212,7 +212,7 @@ class SetupView(Adw.PreferencesPage):
 
             if tiling_info.status == TilingStatus.TILING_ASSISTANT:
                 self._tiling_status_row.set_subtitle("active")
-                self._tiling_status_icon.set_from_icon_name("emblem-ok-symbolic")
+                self._tiling_status_icon.set_from_icon_name("object-select-symbolic")
                 self._tiling_status_icon.add_css_class("success")
             else:
                 self._tiling_status_row.set_subtitle(

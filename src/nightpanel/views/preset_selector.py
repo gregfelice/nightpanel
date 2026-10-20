@@ -151,7 +151,7 @@ class PresetSelector(Adw.Dialog):
         row.add_suffix(badge)
 
         # Selection checkmark (hidden initially)
-        check = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
+        check = Gtk.Image.new_from_icon_name("object-select-symbolic")
         check.set_visible(False)
         check.add_css_class("accent")
         row.add_suffix(check)

@@ -58,7 +58,7 @@ CATEGORIES = [
     ShortcutCategory(
         id="window-management",
         name="Window Management",
-        icon="preferences-system-windows-symbolic",
+        icon="focus-windows-symbolic",
         description="Move, resize, and manage windows",
     ),
     ShortcutCategory(

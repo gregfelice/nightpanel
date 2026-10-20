@@ -21,7 +21,7 @@ CATEGORIES = [
     ShortcutCategory(
         id="kwin",
         name="Window Management",
-        icon="preferences-system-windows-symbolic",
+        icon="focus-windows-symbolic",
         description="KWin window manager shortcuts",
     ),
     ShortcutCategory(
