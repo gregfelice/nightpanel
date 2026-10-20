@@ -32,7 +32,13 @@ import pytest
 SCRIPT = Path(
     shutil.which("nightpanel-toggle") or Path.home() / ".local" / "bin" / "nightpanel-toggle"
 )
-DEBOUNCE_S = 0.5  # short window keeps tests under ~2 s
+DEBOUNCE_S = 0.5  # the script caps this at toggle.GUARD_CEIL_S (0.2 s)
+
+# The tests set the active file's mtime instead of sleeping. A sleep races the subprocess's
+# interpreter startup, which on a loaded machine alone outlasts the 0.2 s window and turns a
+# "quick" second press into a legitimate revert.
+FRESH_S = 60.0  # mtime this far in the future: age is negative, always inside the window
+STALE_S = 60.0  # mtime this far in the past: always outside the window
 
 
 @pytest.fixture
@@ -54,6 +60,12 @@ def _invoke(env):
     r = subprocess.run([str(SCRIPT)], env=env, capture_output=True, text=True, timeout=10)
     assert r.returncode == 0, f"toggle script failed: {r.stderr}"
     return r
+
+
+def _age_active(tmp_path, offset_s: float) -> None:
+    """Set nightpanel-active's mtime to now + offset_s."""
+    t = time.time() + offset_s
+    os.utime(tmp_path / "nightpanel-active", (t, t))
 
 
 def _active(tmp_path) -> bool:
@@ -89,7 +101,7 @@ def test_quick_second_press_is_debounced(env, tmp_path):
     click reverts immediately after the real press.
     """
     _invoke(env)
-    time.sleep(DEBOUNCE_S * 0.2)
+    _age_active(tmp_path, FRESH_S)
     _invoke(env)
     assert _active(tmp_path), "ACTIVE_FILE must persist through a debounced revert"
     assert _last_decision(tmp_path) == "debounce-revert"
@@ -98,7 +110,7 @@ def test_quick_second_press_is_debounced(env, tmp_path):
 def test_revert_after_window_proceeds(env, tmp_path):
     """Press well after the window: legitimate revert proceeds."""
     _invoke(env)
-    time.sleep(DEBOUNCE_S * 1.5)
+    _age_active(tmp_path, -STALE_S)
     _invoke(env)
     assert not _active(tmp_path)
     assert _last_decision(tmp_path) == "revert"
@@ -107,7 +119,7 @@ def test_revert_after_window_proceeds(env, tmp_path):
 def test_full_round_trip(env, tmp_path):
     """apply → wait → revert → quickly apply again."""
     _invoke(env)
-    time.sleep(DEBOUNCE_S * 1.5)
+    _age_active(tmp_path, -STALE_S)
     _invoke(env)
     assert not _active(tmp_path)
     _invoke(env)  # ACTIVE_FILE absent → apply, no debounce involved
