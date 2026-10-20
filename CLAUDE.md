@@ -79,7 +79,7 @@ Key patterns:
 ## Conventions
 
 - **Python**: 3.11+, ruff for linting/formatting, line length 100
-- **Testing**: pytest with pytest-cov, pytest-mock; tests in `tests/unit/`; 220+ tests on the keyboard half. **Theming layer has zero test coverage** — see `docs/BACKLOG.md`.
+- **Testing**: pytest with pytest-cov, pytest-mock; tests in `tests/unit/` and `tests/invariants/` (the adapter-contract battery, ADR-001). The theming layer is covered: adapters 91–100%, renderers 100%, orchestrator 54%, `theme_service.py` 33%.
 - **Packaging**: Use `uv pip` for installs, Meson build system, Flatpak for distribution
 - **Git**: Conventional commit messages. Forgejo canonical; GitHub is public mirror (see Platform Compliance).
 - **Branching**: main branch
@@ -98,8 +98,8 @@ Key patterns:
 
 **v0.1.0-alpha** — Keyboard half is solid on GNOME/Wayland. Theming layer is functional but has known correctness/portability bugs flagged in `docs/BACKLOG.md` (hardcoded Firefox profile, brittle gtk.css strip, snapshot-corruption risk, etc.).
 
-- 220 tests passing on the keyboard half (6 failing; mock setup issues)
-- 29% code coverage on keyboard half; 0% on the theming layer
+- 698 tests passing, 8 skipped (the palette rule, scoped to tmux); none failing
+- 49% total coverage (2026-10-20); the keyboard views and `window.py` are the weakest
 - Flathub submission pending review
 - AUR package published
 - Known platform limitation: GNOME does not implement xdg-desktop-portal GlobalShortcuts

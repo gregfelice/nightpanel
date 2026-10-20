@@ -12,13 +12,19 @@ Protocol: each message = 4-byte little-endian uint32 length + UTF-8 JSON.
 from __future__ import annotations
 
 import json
+import os
 import select
 import struct
 import sys
 from pathlib import Path
 
-COMMAND_FILE = Path.home() / ".config" / "nightpanel" / "np-command.json"
 POLL_INTERVAL = 0.5  # seconds
+
+
+def _command_file() -> Path:
+    """Resolved per call, not at import. Standalone script, so it cannot use Paths."""
+    base = os.environ.get("NP_CONFIG_DIR") or (Path.home() / ".config" / "nightpanel")
+    return Path(base) / "np-command.json"
 
 
 def _read() -> dict | None:
@@ -55,12 +61,13 @@ def main() -> None:
             # Extension → host messages (status pings etc.) — no-op for now
 
         # Watch for commands written by the orchestrator
-        if COMMAND_FILE.exists():
+        command_file = _command_file()
+        if command_file.exists():
             try:
-                mtime = COMMAND_FILE.stat().st_mtime
+                mtime = command_file.stat().st_mtime
                 if mtime != last_mtime:
                     last_mtime = mtime
-                    command = json.loads(COMMAND_FILE.read_text())
+                    command = json.loads(command_file.read_text())
                     _write(command)
             except (OSError, json.JSONDecodeError):
                 pass

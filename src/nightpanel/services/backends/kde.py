@@ -10,12 +10,11 @@ import subprocess
 from pathlib import Path
 
 from nightpanel.models import KeyBinding, Shortcut, ShortcutCategory
+from nightpanel.paths import Paths
 from nightpanel.services.backends.base import ShortcutsBackend
 
 logger = logging.getLogger(__name__)
 
-# KDE shortcut config file location
-KGLOBAL_SHORTCUTS_RC = Path.home() / ".config" / "kglobalshortcutsrc"
 
 # Category definitions for KDE
 CATEGORIES = [
@@ -151,18 +150,24 @@ class KDEShortcutsBackend(ShortcutsBackend):
         self._config.optionxform = str  # Preserve case
         self._load_config()
 
+    @staticmethod
+    def _shortcuts_rc() -> Path:
+        """KDE shortcut config file, resolved per call so XDG_CONFIG_HOME is honoured."""
+        return Paths.detect().config / "kglobalshortcutsrc"
+
     def _load_config(self) -> None:
         """Load kglobalshortcutsrc config file."""
-        if KGLOBAL_SHORTCUTS_RC.exists():
+        rc = self._shortcuts_rc()
+        if rc.exists():
             try:
-                self._config.read(str(KGLOBAL_SHORTCUTS_RC))
+                self._config.read(str(rc))
             except configparser.Error as e:
                 logger.error(f"Failed to parse kglobalshortcutsrc: {e}")
 
     def _save_config(self) -> bool:
         """Save kglobalshortcutsrc config file."""
         try:
-            with open(KGLOBAL_SHORTCUTS_RC, "w") as f:
+            with open(self._shortcuts_rc(), "w") as f:
                 self._config.write(f)
             return True
         except OSError as e:

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import gi
 
@@ -14,13 +13,13 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from .icon_theme import ensure_symbolic_icons
 from .palette import NIGHTPANEL
+from .paths import Paths
 from .renderers import player as _player_r
 
 MPRIS_PATH = "/org/mpris/MediaPlayer2"
 PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
 
 _PREFERRED = "org.mpris.MediaPlayer2.spotify"
-_NP_ACTIVE = Path.home() / ".config" / "nightpanel" / "nightpanel-active"
 
 # Always active: Inter Light header title + controls in the palette accent.
 _PLAYER_CSS = _player_r.render_player_css(NIGHTPANEL).encode()
@@ -167,7 +166,7 @@ class PlayerWindow(Adw.ApplicationWindow):
     # ── nightpanel color sync ─────────────────────────────────────
 
     def _sync_np_colors(self) -> None:
-        active = _NP_ACTIVE.exists()
+        active = (Paths.detect().nightpanel / "nightpanel-active").exists()
         if active == self._np_active:
             return
         self._np_active = active
