@@ -56,8 +56,12 @@ jobs:
         run: |
           pip install --break-system-packages pytest pytest-cov pytest-mock pydantic tomli tomli-w tomlkit
 
-      - name: Run unit tests
-        run: PYTHONPATH=src pytest tests/unit/ -v --cov=nightpanel --cov-report=term-missing --cov-report=xml
+      - name: Run unit tests + contract battery
+        # tests/invariants/ is the enforcement mechanism (ADR-001): every Adapter
+        # subclass discovered by walking nightpanel.adapters is checked against the
+        # contract. bin/test runs the same two directories, so a developer and CI
+        # cannot disagree about what "green" means.
+        run: PYTHONPATH=src pytest tests/unit/ tests/invariants/ -v --cov=nightpanel --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

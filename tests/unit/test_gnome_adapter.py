@@ -11,107 +11,136 @@ Contract (configurable, default black — the Saab "pure black" design):
   - revert(): always restores the background from the snapshot, so toggle-off
     puts the user's wallpaper back regardless of which mode applied.
 
-The GTK-CSS file writes and the Nautilus bounce are out of scope here (covered
-by the renderer tests / manual matrix), so they're stubbed.
+Migrated from patching the adapter's private helpers to injected
+``Paths``/``Runner`` (see tests/conftest.py): gsettings calls are observed as
+recorded commands, the keep-wallpaper sentinel is a real file under the
+fixture, and the CSS round trip is asserted as the byte-for-byte restore the
+contract now requires.
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 
+from nightpanel.adapters.base import AdapterError
 from nightpanel.adapters.gnome import GnomeAdapter
+from nightpanel.palette import NIGHTPANEL, Palette
+from nightpanel.paths import Paths
+from nightpanel.renderers.gtk import START_SENTINEL
+from nightpanel.runner import RecordingRunner
 
 _BG_SCHEMA = "org.gnome.desktop.background"
+_INTERFACE_SCHEMA = "org.gnome.desktop.interface"
 
 
 @pytest.fixture
 def palette():
-    from nightpanel.palette import Palette
-
     return Palette()
 
 
 @pytest.fixture
-def gsettings_calls():
-    """Patch the adapter's gsettings + side-effect helpers; capture every
-    ``_gsettings_set`` as a (schema, key, value) tuple."""
-    calls: list[tuple[str, str, str]] = []
-    with (
-        patch(
-            "nightpanel.adapters.gnome._gsettings_set",
-            side_effect=lambda s, k, v: calls.append((s, k, v)),
-        ),
-        patch("nightpanel.adapters.gnome._bounce_nautilus"),
-        patch.object(GnomeAdapter, "_apply_gtk_css"),
-        patch.object(GnomeAdapter, "_revert_gtk_css"),
-    ):
-        yield calls
+def env(paths: Paths, runner: RecordingRunner):
+    """The fixture root is not pre-created, so the directories the tests write into
+    are made here — the same as the invariants seeders do."""
+    gtk4 = paths.config / "gtk-4.0" / "gtk.css"
+    gtk3 = paths.config / "gtk-3.0" / "gtk.css"
+    for path in (gtk4, gtk3):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    paths.nightpanel.mkdir(parents=True, exist_ok=True)
+    return SimpleNamespace(paths=paths, runner=runner, gtk4=gtk4, gtk3=gtk3)
 
 
-def test_apply_blacks_out_wallpaper_by_default(palette, gsettings_calls, tmp_path, monkeypatch):
-    monkeypatch.setenv("NP_CONFIG_DIR", str(tmp_path))  # no keep-wallpaper sentinel
-    GnomeAdapter().apply(palette)
-    bg = {(k, v) for (s, k, v) in gsettings_calls if s == _BG_SCHEMA}
+def _sets(runner: RecordingRunner) -> set[tuple[str, str, str]]:
+    """Every ``gsettings set`` the adapter issued, as (schema, key, value)."""
+    return {(cmd[2], cmd[3], cmd[4]) for cmd in runner.calls if cmd[1] == "set"}
+
+
+def test_apply_blacks_out_wallpaper_by_default(env, palette):
+    GnomeAdapter(paths=env.paths, runner=env.runner).apply(palette)
+    bg = {(k, v) for (s, k, v) in _sets(env.runner) if s == _BG_SCHEMA}
     assert ("picture-uri", "") in bg
     assert ("picture-uri-dark", "") in bg
     assert ("primary-color", palette.bg) in bg
     assert ("picture-options", "none") in bg
 
 
-def test_apply_keeps_wallpaper_when_opted_out(palette, gsettings_calls, tmp_path, monkeypatch):
-    monkeypatch.setenv("NP_CONFIG_DIR", str(tmp_path))
-    (tmp_path / "keep-wallpaper").touch()
-    GnomeAdapter().apply(palette)
-    bg_keys = [(s, k, v) for (s, k, v) in gsettings_calls if s == _BG_SCHEMA]
+def test_apply_keeps_wallpaper_when_opted_out(env, palette):
+    (env.paths.nightpanel / "keep-wallpaper").touch()
+    GnomeAdapter(paths=env.paths, runner=env.runner).apply(palette)
+    bg_keys = [(s, k, v) for (s, k, v) in _sets(env.runner) if s == _BG_SCHEMA]
     assert bg_keys == [], f"keep-wallpaper opt-out must leave the background alone, got {bg_keys}"
 
 
-def test_apply_still_sets_dark_color_scheme(palette, gsettings_calls):
-    GnomeAdapter().apply(palette)
-    assert (
-        "org.gnome.desktop.interface",
-        "color-scheme",
-        "prefer-dark",
-    ) in gsettings_calls
+def test_apply_still_sets_dark_color_scheme(env, palette):
+    GnomeAdapter(paths=env.paths, runner=env.runner).apply(palette)
+    assert (_INTERFACE_SCHEMA, "color-scheme", "prefer-dark") in _sets(env.runner)
 
 
-def test_apply_invokes_gtk_css_and_nautilus_bounce(palette):
-    with (
-        patch("nightpanel.adapters.gnome._gsettings_set"),
-        patch("nightpanel.adapters.gnome._bounce_nautilus") as bounce,
-        patch.object(GnomeAdapter, "_apply_gtk_css") as gtk,
-    ):
-        GnomeAdapter().apply(palette)
-    assert gtk.called and bounce.called
+def test_apply_writes_gtk_css_and_bounces_nautilus(env, palette):
+    """The CSS half and the Nautilus bounce are real effects, so they are
+    asserted as effects: the sentinel-wrapped CSS lands at both config paths,
+    and the running Nautilus is asked to quit so it re-parses it."""
+    GnomeAdapter(paths=env.paths, runner=env.runner).apply(palette)
+
+    for path in (env.gtk4, env.gtk3):
+        assert path.exists(), f"{path} was not written"
+        css = path.read_text()
+        assert START_SENTINEL in css
+        assert palette.bg in css, "the CSS must be rendered from the palette, not one hex"
+
+    assert ["gapplication", "action", "org.gnome.Nautilus", "kill"] in env.runner.calls
 
 
-def test_revert_restores_wallpaper_from_snapshot(gsettings_calls):
+def test_revert_restores_wallpaper_and_css_from_snapshot(env):
     """The rescue path: a user toggled on under the old build has their real
-    wallpaper in the snapshot; revert must put it back."""
-    snapshot = {
-        "color_scheme": "default",
-        "bg_uri": "file:///home/u/Pictures/wall.jpg",
-        "bg_uri_dark": "file:///home/u/Pictures/wall-dark.jpg",
-        "bg_color": "#3465a4",
-        "bg_options": "zoom",
-    }
-    GnomeAdapter().revert(snapshot)
-    assert (_BG_SCHEMA, "picture-uri", snapshot["bg_uri"]) in gsettings_calls
-    assert (_BG_SCHEMA, "picture-uri-dark", snapshot["bg_uri_dark"]) in gsettings_calls
-    assert (_BG_SCHEMA, "primary-color", snapshot["bg_color"]) in gsettings_calls
-    assert (_BG_SCHEMA, "picture-options", "zoom") in gsettings_calls
-    assert ("org.gnome.desktop.interface", "color-scheme", "default") in gsettings_calls
+    wallpaper in the snapshot; revert must put it back — and put the CSS files
+    back byte-for-byte, which the old version never did."""
+    user_css = "user css — nightpanel must put this back\n"
+    env.gtk4.write_text(user_css)
+    env.gtk3.write_text(user_css)
+    env.runner.prefix[("gsettings", "get")] = "'user-value'"
+
+    adapter = GnomeAdapter(paths=env.paths, runner=env.runner)
+    snapshot = adapter.snapshot()
+    adapter.apply(NIGHTPANEL)
+    env.runner.calls.clear()
+    adapter.revert(snapshot)
+
+    sets = _sets(env.runner)
+    assert (_BG_SCHEMA, "picture-uri", "user-value") in sets
+    assert (_BG_SCHEMA, "picture-uri-dark", "user-value") in sets
+    assert (_BG_SCHEMA, "primary-color", "user-value") in sets
+    assert (_BG_SCHEMA, "picture-options", "user-value") in sets
+    assert (_INTERFACE_SCHEMA, "color-scheme", "user-value") in sets
+    assert env.gtk4.read_text() == user_css
+    assert env.gtk3.read_text() == user_css
 
 
-def test_snapshot_still_captures_background_keys(gsettings_calls):
+def test_revert_refuses_an_empty_snapshot(env):
+    adapter = GnomeAdapter(paths=env.paths, runner=env.runner)
+    with pytest.raises(AdapterError, match="refusing"):
+        adapter.revert({})
+
+
+def test_snapshot_still_captures_background_keys(env):
     """revert can only rescue if snapshot keeps recording the bg — guard that
     the keys weren't dropped along with the apply-time writes."""
-    with patch(
-        "nightpanel.adapters.gnome._gsettings_get",
-        side_effect=lambda s, k: f"{s}/{k}",
-    ):
-        snap = GnomeAdapter().snapshot()
-    for key in ("bg_uri", "bg_uri_dark", "bg_color", "bg_options"):
+    env.runner.prefix[("gsettings", "get")] = "'user-value'"
+    snap = GnomeAdapter(paths=env.paths, runner=env.runner).snapshot()
+    for key in ("color_scheme", "bg_uri", "bg_uri_dark", "bg_color", "bg_options"):
         assert key in snap
+    assert snap["bg_uri"] == "user-value"
+
+
+def test_verify_keys_off_color_scheme_and_sentinel(env):
+    """verify("on") needs both the dark scheme and the sentinel-wrapped CSS —
+    one alone is not nightpanel."""
+    env.runner.prefix[("gsettings", "get")] = "'prefer-dark'"
+    adapter = GnomeAdapter(paths=env.paths, runner=env.runner, palette=NIGHTPANEL)
+    assert adapter.verify("on") is False  # dark scheme, but no CSS yet
+
+    env.gtk4.write_text(f"{START_SENTINEL}\nx\n")
+    assert adapter.verify("on") is True
+    assert adapter.verify("off") is False
