@@ -215,8 +215,19 @@ class PlayerWindow(Adw.ApplicationWindow):
             self._bus_name = target if self._proxy else None
         return bool(self._proxy)
 
+    def _prefer_spotify(self) -> None:
+        """Move off a stand-in player once Spotify registers.
+
+        The app launches Spotify and builds this window at once, so Spotify is not
+        yet on the bus and _reconnect() attaches to whatever else is playing (a
+        browser tab). Without this check that choice would stick for the session.
+        """
+        if self._bus_name != _PREFERRED and _PREFERRED in _find_mpris_players():
+            self._reconnect()
+
     def _poll(self) -> bool:
         self._sync_np_colors()
+        self._prefer_spotify()
 
         if not self._proxy:
             self._reconnect()
