@@ -1,3 +1,18 @@
+nightpanel (0.3.2-1) unstable; urgency=low
+
+  * shortcuts: Super+P is bound to the mini-player by default. A new
+    `nightpanel --seed-shortcuts` and an /etc/xdg/autostart entry add it once
+    per user at login; it never takes a key another binding holds and does not
+    return after the user removes it.
+  * shortcuts: the cheat-sheet step matched any command containing
+    "nightpanel" and rewrote the player's entry, so Super+P opened the cheat
+    sheet. The lookup keywords no longer overlap, and an entry broken this way
+    is repaired.
+  * player: switch to Spotify once it registers on the bus; it used to stay
+    attached to the first other media player for the whole session.
+
+ -- Greg Felice <gregfelice@gmail.com>  Tue, 20 Oct 2026 20:30:00 -0400
+
 nightpanel (0.3.1-1) unstable; urgency=low
 
   * ui: emblem-ok-symbolic and preferences-system-windows-symbolic are not in

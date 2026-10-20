@@ -59,6 +59,17 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.2" date="2026-10-20">
+      <description>
+        <p>Super+P now opens the Nightpanel mini-player. It is bound the first
+        time you log in after installing, never over a shortcut you already
+        use, and not again if you remove it. An earlier launcher setup could
+        overwrite that shortcut so it opened the keyboard cheat sheet instead;
+        that is fixed, and a shortcut already broken that way is repaired.</p>
+        <p>The mini-player now switches to Spotify as soon as it starts,
+        instead of staying attached to a browser tab that was playing media.</p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-10-20">
       <description>
         <p>Fixes two icons that showed as blank placeholders: the checkmark
