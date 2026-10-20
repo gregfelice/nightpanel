@@ -74,6 +74,7 @@ ignore = [
 # GTK/GI apps require gi.require_version() before imports from gi.repository
 "src/nightpanel/__main__.py" = ["E402"]
 "src/nightpanel/application.py" = ["E402"]
+"src/nightpanel/icon_theme.py" = ["E402"]
 "src/nightpanel/window.py" = ["E402"]
 "src/nightpanel/player_app.py" = ["E402"]
 "src/nightpanel/models/shortcut.py" = ["E402"]

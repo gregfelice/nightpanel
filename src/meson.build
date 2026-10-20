@@ -5,6 +5,7 @@ nightpanel_sources = [
   'nightpanel/__init__.py',
   'nightpanel/__main__.py',
   'nightpanel/application.py',
+  'nightpanel/icon_theme.py',
   'nightpanel/window.py',
   'nightpanel/palette.py',
   'nightpanel/player_app.py',

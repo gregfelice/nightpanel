@@ -12,6 +12,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
+from .icon_theme import ensure_symbolic_icons
 from .palette import NIGHTPANEL
 from .renderers import player as _player_r
 
@@ -265,6 +266,10 @@ class PlayerApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id="io.github.gregfelice.NightpanelPlayer")
         self._launched_spotify = False
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        ensure_symbolic_icons()
 
     def do_activate(self):
         # If a window already exists, just raise it.

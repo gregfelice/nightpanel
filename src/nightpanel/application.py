@@ -11,6 +11,7 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
+from nightpanel.icon_theme import ensure_symbolic_icons
 from nightpanel.window import DailyDriverWindow
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,11 @@ class DailyDriverApplication(Adw.Application):
 
         self.activate()
         return 0
+
+    def do_startup(self) -> None:
+        """Prepare the display before any window exists."""
+        Adw.Application.do_startup(self)
+        ensure_symbolic_icons()
 
     def do_activate(self) -> None:
         """Activate the application."""
