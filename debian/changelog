@@ -1,3 +1,13 @@
+nightpanel (0.3.1-1) unstable; urgency=low
+
+  * ui: emblem-ok-symbolic and preferences-system-windows-symbolic are not in
+    the Adwaita theme and rendered as missing-image placeholders (tiling
+    status row, preset selector, window-management category). Use
+    object-select-symbolic and focus-windows-symbolic.
+  * tests: every symbolic icon name in src/ is resolved against Adwaita.
+
+ -- Greg Felice <gregfelice@gmail.com>  Tue, 20 Oct 2026 19:30:00 -0400
+
 nightpanel (0.3.0-1) unstable; urgency=low
 
   * Adapter contract enforced at runtime (ADR-001). A failed command or an

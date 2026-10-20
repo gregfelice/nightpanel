@@ -59,6 +59,13 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.1" date="2026-10-20">
+      <description>
+        <p>Fixes two icons that showed as blank placeholders: the checkmark
+        on the tiling assistant status row and the preset list, and the
+        window management category icon in the shortcut list.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-10-20">
       <description>
         <p>Nightpanel now reports a failed toggle instead of recording it as
